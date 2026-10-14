@@ -349,7 +349,7 @@ $('members-close').addEventListener('click', () => closePanel());
 $('panel-backdrop').addEventListener('click', () => closePanel());
 $('room-button').addEventListener('click', () => closePanel());
 $('invite').addEventListener('click', async () => {
-  if (window.moeumHost) { try { const result = await window.moeumHost.invite(); if (result.copied) toast('초대 정보를 복사했어요.'); } catch (error) { toast(error.message); } return; }
+  if (window.moeumClient) { try { toast(await window.moeumClient.invite() ? '초대 주소를 복사했어요.' : '서버의 외부 접속 주소를 준비 중이에요.'); } catch (error) { toast(error.message); } return; }
   if (['127.0.0.1','localhost'].includes(location.hostname)) { toast('MainPC에서는 공유주소.txt의 외부 접속 주소를 전달해 주세요.'); return; }
   try { await navigator.clipboard.writeText(location.origin); toast('초대 링크를 복사했어요. 닉네임만 입력하면 입장할 수 있어요.'); } catch { toast('브라우저 주소창의 링크를 복사해 주세요.'); }
 });
@@ -357,18 +357,6 @@ $('logout').addEventListener('click', async () => { try { await api('/api/logout
 async function boot() {
   syncViewport();
   if (history.state?.moeumPanel) { const { moeumPanel, ...other } = history.state; history.replaceState(other, ''); }
-  if (window.moeumHost) {
-    const updateHost = info => {
-      $('host-status').hidden = true; $('host-status').querySelector('strong').textContent = info.publicUrl ? '초대 준비 완료' : 'MainPC 서버 실행 중';
-      $('host-status').querySelector('p').textContent = info.shareStatus;
-      $('host-retry').hidden = Boolean(info.publicUrl) || info.sharingBusy;
-      $('host-retry').disabled = info.sharingBusy;
-      $('invite').childNodes.forEach(node => { if (node.nodeType === Node.TEXT_NODE) node.textContent = '친구 초대하기'; });
-      $('logout').hidden = true;
-    };
-    window.moeumHost.info().then(updateHost).catch(() => {}); window.moeumHost.onStatus(updateHost); window.moeumHost.onInvite(() => $('invite').click());
-    $('host-retry').addEventListener('click', () => window.moeumHost.retrySharing().catch(error => toast(error.message)));
-  }
   try { $('nickname').value = localStorage.getItem('moeum-nickname') || ''; } catch { /* Storage can be disabled. */ }
   try { const info = await api('/api/info'); state.maxSize = info.maxFileSize; document.querySelectorAll('.room-name').forEach(node => node.textContent = info.roomName); } catch { $('login-error').textContent = '서버에 연결할 수 없습니다. 잠시 후 새로고침해 주세요.'; }
   try { const { user } = await api('/api/me'); enter(user); } catch { /* First visit requires login. */ }

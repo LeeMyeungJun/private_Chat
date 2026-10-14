@@ -7,9 +7,6 @@ function update(info) {
   $('public-badge').classList.toggle('ready', Boolean(info.publicUrl));
   $('invite').disabled = !info.publicUrl;
   $('retry').hidden = Boolean(info.publicUrl) || info.sharingBusy;
-  $('chat-badge').textContent = info.chatOpen ? '열림' : '닫힘';
-  $('chat-badge').classList.toggle('ready', info.chatOpen);
-  $('open-chat').textContent = info.chatOpen ? '채팅창으로 이동' : '채팅창 열기';
 }
 async function action(callback) {
   $('panel-error').textContent = '';
@@ -17,7 +14,6 @@ async function action(callback) {
 }
 $('invite').addEventListener('click', () => action(() => window.moeumHost.invite()));
 $('retry').addEventListener('click', () => action(async () => update(await window.moeumHost.retrySharing())));
-$('open-chat').addEventListener('click', () => action(async () => update(await window.moeumHost.openChat())));
 $('stop-server').addEventListener('click', () => action(() => window.moeumHost.quitServer()));
 window.moeumHost.onStatus(update);
 window.moeumHost.onInvite(() => $('invite').click());

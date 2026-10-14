@@ -8,6 +8,7 @@ foreach ($chatLauncher in @(
   $shortcutObject.TargetPath = Join-Path $projectPath 'node_modules\electron\dist\electron.exe'
   $shortcutObject.Arguments = $chatLauncher.Arguments
   $shortcutObject.WorkingDirectory = $projectPath
+  $shortcutObject.WindowStyle = 1
   $shortcutObject.Description = $chatLauncher.Description
   $shortcutObject.Save()
 }

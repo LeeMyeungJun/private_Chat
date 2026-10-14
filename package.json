@@ -9,7 +9,8 @@
     "server": "node server.js",
     "test": "node --test test/*.test.js",
     "test:desktop": "node scripts/test-desktop.cjs",
-    "check": "node --check server.js && node --check media-info.js && node --check media-worker.js && node --check public/app.js && node --check desktop/main.cjs && node --check desktop/tunnel-worker.cjs && node --check desktop/cloudflared.cjs && node --check desktop/connection-publisher.cjs"
+    "check": "node --check server.js && node --check media-info.js && node --check media-worker.js && node --check public/app.js && node --check desktop/main.cjs && node --check desktop/tunnel-worker.cjs && node --check desktop/cloudflared.cjs && node --check desktop/connection-publisher.cjs && node --check desktop/client.cjs && node --check desktop/client-preload.cjs && node --check desktop/client-closed.js && node --check desktop/server-panel.js",
+    "client": "electron . --chat"
   },
   "engines": {
     "node": ">=22"
