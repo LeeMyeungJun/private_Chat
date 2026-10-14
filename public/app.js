@@ -83,19 +83,14 @@ function showLogin() {
   state.socket?.disconnect(); state.socket = null; state.user = null;
   closePanel({ restore: false }); document.body.classList.remove('chat-active');
   $('workspace').hidden = true; $('login').hidden = false;
-  $('password').value = ''; if (!mobileView.matches) $('nickname').focus();
-  $('password').type = 'password'; $('password-toggle').textContent = '보기'; $('password-toggle').setAttribute('aria-pressed', 'false');
+  if (!mobileView.matches) $('nickname').focus();
 }
-$('password-toggle').addEventListener('click', () => {
-  const visible = $('password').type === 'password'; $('password').type = visible ? 'text' : 'password';
-  $('password-toggle').textContent = visible ? '숨김' : '보기'; $('password-toggle').setAttribute('aria-pressed', String(visible));
-});
 $('login-form').addEventListener('submit', async event => {
   event.preventDefault(); const button = event.submitter || $('login-form').querySelector('button[type="submit"]'); button.disabled = true; $('login-error').textContent = '';
   try {
-    const { user } = await api('/api/login', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ nickname: $('nickname').value, password: $('password').value }) });
+    const { user } = await api('/api/login', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ nickname: $('nickname').value }) });
     try { localStorage.setItem('moeum-nickname', user.nickname); } catch { /* Optional nickname memory. */ }
-    $('password').value = ''; enter(user);
+    enter(user);
   } catch (error) { $('login-error').textContent = error.message; } finally { button.disabled = false; }
 });
 function enter(user) {
@@ -356,7 +351,7 @@ $('room-button').addEventListener('click', () => closePanel());
 $('invite').addEventListener('click', async () => {
   if (window.moeumHost) { try { const result = await window.moeumHost.invite(); if (result.copied) toast('초대 정보를 복사했어요.'); } catch (error) { toast(error.message); } return; }
   if (['127.0.0.1','localhost'].includes(location.hostname)) { toast('MainPC에서는 공유주소.txt의 외부 접속 주소를 전달해 주세요.'); return; }
-  try { await navigator.clipboard.writeText(location.origin); toast('초대 링크를 복사했어요. 비밀번호도 따로 알려 주세요.'); } catch { toast('브라우저 주소창의 링크를 복사해 주세요.'); }
+  try { await navigator.clipboard.writeText(location.origin); toast('초대 링크를 복사했어요. 닉네임만 입력하면 입장할 수 있어요.'); } catch { toast('브라우저 주소창의 링크를 복사해 주세요.'); }
 });
 $('logout').addEventListener('click', async () => { try { await api('/api/logout', { method: 'POST' }); showLogin(); } catch (error) { toast(error.message); } });
 async function boot() {

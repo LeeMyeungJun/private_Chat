@@ -7,13 +7,13 @@ import path from 'node:path';
 import { once } from 'node:events';
 import { io } from 'socket.io-client';
 
-test('authenticated chat, files, retry deduplication and a fresh room on every server start', async t => {
+test('nickname-only entry, files, retry deduplication and a fresh room on every server start', async t => {
   const dataDir = await mkdtemp(path.join(tmpdir(), '.moeum-test-'));
   let child;
   const sockets = [];
   t.after(async () => { sockets.forEach(socket => socket.close()); if (child?.exitCode === null) { child.kill(); await once(child, 'exit'); } await rm(dataDir, { recursive: true, force: true }); });
   async function start() {
-    child = spawn(process.execPath, ['server.js'], { cwd: process.cwd(), env: { ...process.env, PORT: '0', DATA_DIR: dataDir, CHAT_PASSWORD: 'test-secret' }, stdio: ['ignore', 'pipe', 'pipe'] });
+    child = spawn(process.execPath, ['server.js'], { cwd: process.cwd(), env: { ...process.env, PORT: '0', DATA_DIR: dataDir }, stdio: ['ignore', 'pipe', 'pipe'] });
     let stderr = ''; child.stderr.on('data', data => stderr += data);
     return await new Promise((resolve, reject) => {
       const timer = setTimeout(() => reject(new Error('Startup timed out: ' + stderr)), 10000);
@@ -21,19 +21,25 @@ test('authenticated chat, files, retry deduplication and a fresh room on every s
       child.once('exit', code => { clearTimeout(timer); if (code) reject(new Error(stderr)); });
     });
   }
+  await writeFile(path.join(dataDir, 'settings.json'), JSON.stringify({ roomName: '우리의 대화', salt: 'legacy', passwordHash: 'legacy' }));
+  await writeFile(path.join(dataDir, '입장비밀번호.txt'), 'obsolete-secret');
   let base = await start();
+  assert.deepEqual(JSON.parse(await readFile(path.join(dataDir, 'settings.json'), 'utf8')), { roomName: '우리의 대화' });
+  assert.ok(!(await readdir(dataDir)).includes('입장비밀번호.txt'));
   async function login(nickname) {
-    const response = await fetch(base + '/api/login', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ nickname, password: 'test-secret' }) });
+    const response = await fetch(base + '/api/login', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ nickname }) });
     assert.equal(response.status, 200); return { cookie: response.headers.get('set-cookie').split(';')[0], ...(await response.json()) };
   }
   async function connect(cookie) {
     const socket = io(base, { extraHeaders: { Cookie: cookie }, transports: ['websocket'], reconnection: false }); sockets.push(socket);
     await Promise.race([once(socket, 'connect'), once(socket, 'connect_error').then(([error]) => { throw error; })]); return socket;
   }
-  assert.equal((await fetch(base)).status, 200);
+  const page = await fetch(base);
+  assert.equal(page.status, 200);
+  assert.ok(!(await page.text()).includes('id="password"'));
   assert.equal((await fetch(base + '/api/messages')).status, 401);
-  const rejected = await fetch(base + '/api/login', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ nickname: '손님', password: 'wrong' }) });
-  assert.equal(rejected.status, 403);
+  const rejected = await fetch(base + '/api/login', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ nickname: '' }) });
+  assert.equal(rejected.status, 400);
   const crossOrigin = await fetch(base + '/api/login', { method: 'POST', headers: { Origin: 'https://evil.example', 'Content-Type': 'application/json' }, body: '{}' });
   assert.equal(crossOrigin.status, 403);
   const alice = await login('메인PC'), bob = await login('친구');

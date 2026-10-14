@@ -68,8 +68,7 @@ async function start() {
   fs.writeFileSync(path.join(dataDir, 'desktop-app-pid.txt'), String(process.pid));
   removeShareAddress();
   await startServer();
-  const password = fs.readFileSync(path.join(dataDir, '입장비밀번호.txt'), 'utf8').trim();
-  const response = await fetch(localUrl + '/api/login', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ nickname: 'MainPC', password }) });
+  const response = await fetch(localUrl + '/api/login', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ nickname: 'MainPC' }) });
   if (!response.ok) throw new Error('호스트 자동 입장에 실패했습니다.');
   const token = response.headers.get('set-cookie').split(';')[0].slice('chat_session='.length);
   await session.defaultSession.cookies.set({ url: localUrl, name: 'chat_session', value: token, httpOnly: true, sameSite: 'strict' });
@@ -87,8 +86,8 @@ async function start() {
   });
   ipcMain.handle('host:invite', async event => {
     authorize(event);
-    const result = await dialog.showMessageBox(BrowserWindow.fromWebContents(event.sender), { type: 'info', title: '친구 초대하기', message: publicUrl ? '이 주소와 비밀번호를 친구에게 전달해 주세요.' : '외부 접속 주소를 준비 중입니다.', detail: `${publicUrl || shareStatus}\n\n입장 비밀번호: ${password}\n\n서버 창을 닫으면 서버와 외부 접속이 종료됩니다.\n채팅창만 닫으면 서버는 계속 실행됩니다.\n서버를 다시 실행하면 새로운 주소가 만들어집니다.`, buttons: publicUrl ? ['주소와 비밀번호 복사', '닫기'] : ['닫기'], defaultId: publicUrl ? 1 : 0, cancelId: publicUrl ? 1 : 0 });
-    if (publicUrl && result.response === 0) clipboard.writeText(`모음 채팅\n${publicUrl}\n입장 비밀번호: ${password}`);
+    const result = await dialog.showMessageBox(BrowserWindow.fromWebContents(event.sender), { type: 'info', title: '친구 초대하기', message: publicUrl ? '이 주소를 친구에게 전달해 주세요.' : '외부 접속 주소를 준비 중입니다.', detail: `${publicUrl || shareStatus}\n\n닉네임만 입력하면 입장할 수 있습니다.\n\n서버 창을 닫으면 서버와 외부 접속이 종료됩니다.\n채팅창만 닫으면 서버는 계속 실행됩니다.\n서버를 다시 실행하면 새로운 주소가 만들어집니다.`, buttons: publicUrl ? ['주소 복사', '닫기'] : ['닫기'], defaultId: publicUrl ? 1 : 0, cancelId: publicUrl ? 1 : 0 });
+    if (publicUrl && result.response === 0) clipboard.writeText(`모음 채팅\n${publicUrl}`);
     return { copied: Boolean(publicUrl) && result.response === 0 };
   });
   session.defaultSession.setPermissionRequestHandler((contents, permission, callback) => callback(false));
@@ -111,6 +110,20 @@ async function start() {
         while (!fs.existsSync(path.join(dataDir, 'public-test-complete')) && Date.now() < deadline) await new Promise(resolve => setTimeout(resolve, 100));
       }
     }
+    const nicknameEntry = await window.webContents.executeJavaScript(`(async () => {
+      await new Promise(resolve => { const timer = setInterval(() => {
+        if (!document.getElementById('workspace').hidden) { clearInterval(timer); resolve(); }
+      }, 50); });
+      showLogin(); await api('/api/logout', { method: 'POST' });
+      if (document.querySelector('input[type="password"]')) return false;
+      document.getElementById('nickname').value = 'MainPC';
+      document.getElementById('login-form').requestSubmit();
+      return new Promise(resolve => { let count = 0; const timer = setInterval(() => {
+        if (!document.getElementById('workspace').hidden) { clearInterval(timer); resolve(true); }
+        else if (++count > 100) { clearInterval(timer); resolve(false); }
+      }, 100); });
+    })()`);
+    log('SMOKE_NICKNAME_ENTRY ' + nicknameEntry);
     const result = await window.webContents.executeJavaScript(`new Promise(resolve => { let count = 0; const poll = setInterval(() => { const ws = document.getElementById('workspace'); if (ws && !ws.hidden) { clearInterval(poll); resolve({ loggedIn: true, title: document.title, overflow: document.documentElement.scrollWidth > innerWidth }); } else if (++count > 100) { clearInterval(poll); resolve({ loggedIn: false }); } }, 100); })`);
     log('SMOKE_UI ' + JSON.stringify(result));
     const serverView = await serverWindow.webContents.executeJavaScript(`({ title: document.title, hasChatControl: !!document.getElementById('open-chat'), hasStopControl: !!document.getElementById('stop-server'), overflow: document.documentElement.scrollWidth > innerWidth })`);

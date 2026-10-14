@@ -27,8 +27,7 @@ const { io } = require('socket.io-client');
         const match = runningLogs.match(/PUBLIC_READY (https:\/\/[^\s]+)/);
         if (match) {
           testedUrl = match[1];
-          const password = (await fs.readFile(path.join(dataDir, '입장비밀번호.txt'), 'utf8')).trim();
-          const response = await fetch(testedUrl + '/api/login', { method: 'POST', headers: { 'Content-Type': 'application/json', Origin: testedUrl }, body: JSON.stringify({ nickname: '외부 검증', password }), signal: AbortSignal.timeout(10000) });
+          const response = await fetch(testedUrl + '/api/login', { method: 'POST', headers: { 'Content-Type': 'application/json', Origin: testedUrl }, body: JSON.stringify({ nickname: '외부 검증' }), signal: AbortSignal.timeout(10000) });
           assert.equal(response.status, 200); const cookie = response.headers.get('set-cookie').split(';')[0];
           remoteSocket = io(testedUrl, { extraHeaders: { Cookie: cookie, Origin: testedUrl }, transports: ['websocket'], reconnection: false, timeout: 10000 });
           await Promise.race([once(remoteSocket, 'connect'), once(remoteSocket, 'connect_error').then(([error]) => { throw error; })]);
@@ -48,6 +47,7 @@ const { io } = require('socket.io-client');
     assert.equal(code, 0, stderr + '\n' + logs);
     assert.match(logs, /SERVER_READY/); assert.match(logs, /WINDOW_READY/);
     assert.match(logs, /SMOKE_SERVER_ONLY .*"chatOpen":false/);
+    assert.match(logs, /SMOKE_NICKNAME_ENTRY true/);
     assert.match(logs, /SMOKE_UI .*"loggedIn":true/);
     assert.match(logs, /SMOKE_UI .*"overflow":false/);
     assert.match(logs, /SERVER_WINDOW_READY/);

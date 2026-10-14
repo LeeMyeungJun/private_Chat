@@ -2,7 +2,7 @@ import express from 'express';
 import multer from 'multer';
 import { Server } from 'socket.io';
 import { createServer } from 'node:http';
-import { randomBytes, randomUUID, scryptSync, timingSafeEqual } from 'node:crypto';
+import { randomBytes, randomUUID } from 'node:crypto';
 import fs from 'node:fs';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
@@ -13,21 +13,16 @@ const dataDir = path.resolve(process.env.DATA_DIR || path.join(root, '.data'));
 const uploadDir = path.join(dataDir, 'uploads');
 fs.mkdirSync(uploadDir, { recursive: true });
 const settingsPath = path.join(dataDir, 'settings.json');
-let settings;
-if (fs.existsSync(settingsPath)) settings = JSON.parse(fs.readFileSync(settingsPath, 'utf8'));
-else {
-  const password = process.env.CHAT_PASSWORD || randomBytes(12).toString('base64url');
-  const salt = randomBytes(16).toString('hex');
-  settings = { roomName: '우리의 대화', salt, passwordHash: scryptSync(password, salt, 64).toString('hex') };
-  fs.writeFileSync(settingsPath, JSON.stringify(settings, null, 2), { mode: 0o600 });
-  fs.writeFileSync(path.join(dataDir, '입장비밀번호.txt'), password + '\n', { mode: 0o600 });
-}
+const savedSettings = fs.existsSync(settingsPath) ? JSON.parse(fs.readFileSync(settingsPath, 'utf8')) : {};
+const settings = { roomName: savedSettings.roomName || '우리의 대화' };
 const historyPath = path.join(dataDir, 'messages.jsonl');
 const uploadIndexPath = path.join(dataDir, 'uploads.json');
 const uploads = Object.create(null);
 const history = [];
 let sequence = 0;
 function startFreshRoom() {
+  fs.writeFileSync(settingsPath, JSON.stringify(settings, null, 2), { mode: 0o600 });
+  fs.rmSync(path.join(dataDir, '입장비밀번호.txt'), { force: true });
   const target = path.resolve(uploadDir);
   if (path.dirname(target) !== dataDir || path.basename(target) !== 'uploads') throw new Error('Invalid upload storage path');
   fs.rmSync(target, { recursive: true, force: true });
@@ -85,9 +80,6 @@ app.post('/api/login', (req, res) => {
   loginAttempts.set(ip, attempt);
   if (attempt.count > 20) return res.status(429).json({ error: '입장 시도가 많습니다. 1분 후 다시 시도해 주세요.' });
   if (!validNickname(req.body.nickname)) return res.status(400).json({ error: '닉네임은 1~20자로 입력해 주세요.' });
-  if (typeof req.body.password !== 'string' || req.body.password.length > 256) return res.status(400).json({ error: '비밀번호를 확인해 주세요.' });
-  const hash = scryptSync(req.body.password, settings.salt, 64);
-  if (!timingSafeEqual(hash, Buffer.from(settings.passwordHash, 'hex'))) return res.status(403).json({ error: '입장 비밀번호가 맞지 않습니다.' });
   const token = randomBytes(32).toString('hex');
   const session = { id: randomUUID(), nickname: req.body.nickname.trim(), expires: Date.now() + 7 * 86400000 };
   sessions.set(token, session);
@@ -219,7 +211,7 @@ const port = Number(process.env.PORT || 3000);
 http.listen(port, '127.0.0.1', () => {
   // A failed port bind must never wipe an already-running room.
   startFreshRoom();
-  console.log(`Private Chat ready: http://127.0.0.1:${http.address().port}\nPassword file: ${path.join(dataDir, '입장비밀번호.txt')}`);
+  console.log(`Private Chat ready: http://127.0.0.1:${http.address().port}`);
 });
 function shutdown() { io.close(); http.close(() => process.exit(0)); setTimeout(() => process.exit(0), 2000).unref(); }
 process.on('SIGTERM', shutdown);

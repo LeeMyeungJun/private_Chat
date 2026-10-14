@@ -66,7 +66,7 @@ public class EntryTest {
         WebView view = views.get(0);
         CountDownLatch ready = new CountDownLatch(1);
         for (int i = 0; i < 60 && ready.getCount() > 0; i++) {
-            runTestOnUiThread(() -> view.evaluateJavascript("Boolean(document.getElementById('login-form') && document.body.classList.contains('android-theme'))", value -> {
+            runTestOnUiThread(() -> view.evaluateJavascript("Boolean(document.getElementById('login-form') && !document.getElementById('password') && document.body.classList.contains('android-theme'))", value -> {
                 if ("true".equals(value)) ready.countDown();
             }));
             Thread.sleep(200);
@@ -74,10 +74,7 @@ public class EntryTest {
         assertTrue("Real chat login and Figma theme should load", ready.await(1, TimeUnit.SECONDS));
         Thread.sleep(1500);
         screenshot(activity, "android-login.png");
-        String password = InstrumentationRegistry.getArguments().getString("password");
-        if (password != null) {
-            String script = "document.getElementById('nickname').value='Android 확인';document.getElementById('password').value="
-                + org.json.JSONObject.quote(password) + ";document.getElementById('login-form').requestSubmit();";
+            String script = "document.getElementById('nickname').value='Android 확인';document.getElementById('login-form').requestSubmit();";
             runTestOnUiThread(() -> view.evaluateJavascript(script, null));
             CountDownLatch joined = new CountDownLatch(1);
             for (int i = 0; i < 60 && joined.getCount() > 0; i++) {
@@ -86,7 +83,7 @@ public class EntryTest {
                 }));
                 Thread.sleep(200);
             }
-            assertTrue("Existing chat should accept the same MainPC password", joined.await(1, TimeUnit.SECONDS));
+            assertTrue("Nickname alone should enter chat", joined.await(1, TimeUnit.SECONDS));
             Thread.sleep(1500);
             CountDownLatch geometry = new CountDownLatch(1);
             runTestOnUiThread(() -> view.evaluateJavascript("['attach-button','send-button'].every(id=>document.getElementById(id).getBoundingClientRect().width>=43.8 && Math.abs(parseFloat(getComputedStyle(document.getElementById(id),'::after').width)-21.6)<0.2) && document.documentElement.scrollWidth<=innerWidth+1", value -> {
@@ -95,7 +92,6 @@ public class EntryTest {
             screenshot(activity, "android-chat.png");
             assertTrue("Figma icons should keep original dimensions without overflow", geometry.await(2, TimeUnit.SECONDS));
             runTestOnUiThread(() -> view.evaluateJavascript("document.getElementById('logout').click()", null));
-        }
         }
     }
     @Test public void closedServerShowsNoticeAndKeepsEntryButton() throws Exception {
