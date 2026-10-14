@@ -12,6 +12,7 @@ const smoke = Boolean(process.env.CHAT_DESKTOP_SMOKE);
 const shareAddressPath = smoke ? path.join(dataDir, '공유주소.txt') : path.join(root, '공유주소.txt');
 if (smoke) app.setPath('userData', path.join(dataDir, 'electron-state'));
 let serverWindow, child, tunnelWorker, quitting = false;
+let stopping = false, quitWaiting = false;
 let publicUrl = '', sharingBusy = false, shareStatus = '외부 접속 주소를 준비하고 있어요.';
 let connectionTimer;
 let connectionGeneration = 0;
@@ -22,16 +23,32 @@ function hostInfo() { return { publicUrl, sharingBusy, shareStatus, localUrl }; 
 function publishInfo() { for (const view of [serverWindow]) if (view && !view.isDestroyed()) view.webContents.send('host:status', hostInfo()); }
 function authorize(event) { if (event.sender !== serverWindow?.webContents) throw new Error('Unauthorized'); }
 function stopServer() {
+  if (stopping) return;
+  stopping = true;
   clearTimeout(connectionTimer); connectionGeneration++;
-  if (tunnelWorker?.connected) tunnelWorker.send({ type: 'stop' }, () => {});
   removeShareAddress();
-  if (child && child.exitCode === null) { log('SERVER_STOP_REQUEST'); child.kill(); }
+  if (child && child.exitCode === null) {
+    log('SERVER_STOP_REQUEST');
+    if (child.connected) child.disconnect();
+    else child.kill();
+    setTimeout(() => { if (child.exitCode === null) child.kill(); }, 2000).unref();
+  }
+  // Keep the tunnel alive briefly so phones receive the server's explicit close event.
+  setTimeout(() => { if (tunnelWorker?.connected) tunnelWorker.send({ type: 'stop' }, () => {}); }, 300);
 }
 function removeShareAddress() { try { fs.unlinkSync(shareAddressPath); } catch (error) { if (error.code !== 'ENOENT') log('ADDRESS_REMOVE_FAILED ' + error.code); } }
 if (!app.requestSingleInstanceLock()) app.quit();
 else {
   app.on('second-instance', () => revealServer(true));
-  app.on('before-quit', () => { quitting = true; stopServer(); });
+  app.on('before-quit', event => {
+    quitting = true;
+    if (child?.exitCode === null && !quitWaiting) {
+      event.preventDefault(); quitWaiting = true;
+      child.once('exit', () => app.quit());
+      setTimeout(() => app.quit(), 2200).unref();
+    }
+    stopServer();
+  });
   app.on('window-all-closed', () => app.quit());
   process.on('exit', stopServer);
   app.whenReady().then(start).catch(error => { log('START_ERROR ' + error.message); dialog.showErrorBox('모음 실행 실패', error.message); app.quit(); });

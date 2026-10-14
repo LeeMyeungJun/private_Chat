@@ -83,8 +83,8 @@ async function api(url, options = {}) {
   if (!response.ok) { if (response.status === 401 && state.user) showLogin(); throw new Error(data.error || '요청에 실패했습니다.'); }
   return data;
 }
-function showLogin() {
-  window.MoeumConnection?.disconnect();
+function showLogin(leaveRoom = false) {
+  if (leaveRoom) window.MoeumConnection?.disconnect();
   state.socket?.disconnect(); state.socket = null; state.user = null;
   closePanel({ restore: false }); document.body.classList.remove('chat-active');
   $('workspace').hidden = true; $('login').hidden = false;
@@ -126,12 +126,13 @@ function enter(user) {
   socket.on('disconnect', reason => {
     updateSendButton(); updateRingButton();
     $('connection').textContent = '연결을 기다리는 중'; $('connection').classList.remove('online'); $('reconnect-banner').hidden = false;
-    if (reason === 'io server disconnect') showLogin();
+    if (reason === 'io server disconnect') showLogin(true);
   });
   socket.on('connect_error', error => {
     if (error.message === 'AUTH_REQUIRED') { showLogin(); $('login-error').textContent = '서버가 재시작되었거나 입장이 만료되었습니다. 다시 입장해 주세요.'; }
   });
   socket.on('notification:ring', notice => toast(notice.nickname + ' 님이 모바일 알림을 울렸어요.'));
+  socket.on('server:closed', () => showLogin(true));
   socket.on('message', addMessage);
   socket.on('presence', users => {
     $('member-count').textContent = users.length; $('members').replaceChildren();
@@ -365,7 +366,10 @@ $('invite').addEventListener('click', async () => {
   if (['127.0.0.1','localhost'].includes(location.hostname)) { toast('MainPC에서는 공유주소.txt의 외부 접속 주소를 전달해 주세요.'); return; }
   try { await navigator.clipboard.writeText(location.origin); toast('초대 링크를 복사했어요. 닉네임만 입력하면 입장할 수 있어요.'); } catch { toast('브라우저 주소창의 링크를 복사해 주세요.'); }
 });
-$('logout').addEventListener('click', async () => { try { await api('/api/logout', { method: 'POST' }); showLogin(); } catch (error) { toast(error.message); } });
+$('logout').addEventListener('click', async () => {
+  if (window.MoeumConnection) { showLogin(true); return; }
+  try { await api('/api/logout', { method: 'POST' }); showLogin(true); } catch (error) { toast(error.message); }
+});
 async function boot() {
   syncViewport();
   if (history.state?.moeumPanel) { const { moeumPanel, ...other } = history.state; history.replaceState(other, ''); }

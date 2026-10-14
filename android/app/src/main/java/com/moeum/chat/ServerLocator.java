@@ -42,7 +42,10 @@ final class ServerLocator {
 
     boolean alive(Server server) throws Exception {
         JSONObject health = new JSONObject(get(server.url + "/api/health"));
-        return health.optBoolean("ok") && server.instanceId.equals(health.optString("instanceId"));
+        String instance = health.optString("instanceId");
+        if (!health.optBoolean("ok") || !instance.matches("[0-9a-f-]{36}"))
+            throw new java.io.IOException("Server status is temporarily unknown");
+        return server.instanceId.equals(instance);
     }
 
     static String get(String address) throws Exception {

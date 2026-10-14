@@ -175,14 +175,14 @@ public final class MainActivity extends Activity {
         network.execute(() -> {
             boolean available = false, retry = false;
             try { available = locator.alive(saved); }
-            catch (java.io.IOException error) { retry = true; }
-            catch (Exception error) { /* A closed tunnel or a different boot cannot restore this room. */ }
+            catch (Exception error) { retry = true; /* Failure to reach a server is not proof it closed. */ }
             final boolean alive = available, waitForNetwork = retry;
             handler.post(() -> {
                 if (destroyed || request != generation) return;
                 if (alive && ChatConnectionService.state(this).contains("instance")) openChat(saved);
                 else if (waitForNetwork && ChatConnectionService.state(this).contains("instance")) {
                     status.setText("인터넷 연결을 기다리고 있습니다. 서버 연결은 유지합니다.");
+                    enter.setEnabled(true); enter.setText("서버 입장");
                     handler.postDelayed(() -> restoreChat(saved, request), 10000);
                 } else showLanding("이전 서버가 종료되었습니다.\n서버 입장을 누르면 현재 서버를 찾습니다.");
             });
@@ -215,9 +215,13 @@ public final class MainActivity extends Activity {
                     if (destroyed || server == null || chat == null) return;
                     String cookie = CookieManager.getInstance().getCookie(server.url);
                     if (cookie == null || !cookie.contains("chat_session=")) return;
+                    String previousInstance = ChatConnectionService.state(MainActivity.this).getString("instance", null);
+                    String previousCookie = ChatConnectionService.state(MainActivity.this).getString("cookie", "");
+                    if (previousInstance != null && !previousInstance.equals(server.instanceId))
+                        ChatConnectionService.subscribe(MainActivity.this, previousInstance, false);
                     ChatConnectionService.state(MainActivity.this).edit().putString("url", server.url)
                         .putString("instance", server.instanceId).putString("cookie", cookie).apply();
-                    if (!connectionStarted) {
+                    if (!connectionStarted || !server.instanceId.equals(previousInstance) || !cookie.equals(previousCookie)) {
                         connectionStarted = true;
                         startForegroundService(new Intent(MainActivity.this, ChatConnectionService.class));
                     }
@@ -248,7 +252,9 @@ public final class MainActivity extends Activity {
                 if (request.isForMainFrame() && response.getStatusCode() >= 500 && !connectionStarted) showLanding("서버가 닫혀 있습니다.\n서버를 열어 주세요.");
             }
             @Override public void onReceivedSslError(WebView view, SslErrorHandler handler, SslError error) {
-                handler.cancel(); showLanding("안전한 서버 연결을 확인할 수 없습니다.");
+                handler.cancel();
+                if (connectionStarted) toast("안전한 서버 연결을 확인할 수 없습니다. 알림 구독은 유지합니다.");
+                else showLanding("안전한 서버 연결을 확인할 수 없습니다.");
             }
             @Override public void onPageFinished(WebView view, String url) { CookieManager.getInstance().flush(); }
         });

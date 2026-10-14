@@ -104,7 +104,12 @@ test('nickname-only entry, files, retry deduplication and a fresh room on every 
   assert.notEqual((await once(collision, 'exit'))[0], 0);
   assert.match(await readFile(path.join(dataDir, 'messages.jsonl'), 'utf8'), /안녕하세요/);
   assert.deepEqual(await readFile(path.join(dataDir, 'uploads', files[0].id)), png);
-  a.close(); b.close(); child.kill(); await once(child, 'exit');
+  const closing = once(a, 'server:closed');
+  const exited = once(child, 'exit');
+  child.disconnect();
+  const [shutdownNotice] = await closing;
+  assert.equal(shutdownNotice.instanceId, (await fetch(base + '/api/health').then(response => response.json())).instanceId);
+  await exited; a.close(); b.close();
   await appendFile(path.join(dataDir, 'messages.jsonl'), '{"partial":');
   await writeFile(path.join(dataDir, 'messages.jsonl.recovery-old'), 'old recovered messages');
   base = await start(); const returning = await login('메인PC');

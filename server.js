@@ -277,7 +277,15 @@ http.listen(port, '127.0.0.1', () => {
   startFreshRoom();
   console.log(`Private Chat ready: http://127.0.0.1:${http.address().port}`);
 });
-function shutdown() { io.close(); http.close(() => process.exit(0)); setTimeout(() => process.exit(0), 2000).unref(); }
+let shuttingDown = false;
+function shutdown() {
+  if (shuttingDown) return;
+  shuttingDown = true;
+  io.emit('server:closed', { instanceId });
+  // Give the explicit shutdown event time to reach connected clients before closing transports.
+  setTimeout(() => { io.close(); http.close(() => process.exit(0)); }, 150);
+  setTimeout(() => process.exit(0), 2000).unref();
+}
 process.on('SIGTERM', shutdown);
 process.on('SIGINT', shutdown);
 // A desktop crash or force-close also disconnects IPC; never leave its server running.

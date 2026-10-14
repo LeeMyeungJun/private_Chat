@@ -169,6 +169,25 @@ public class EntryTest {
             assertTrue(buttons.get(0).isEnabled());
         } finally { ChatConnectionService.disconnect(context); }
     }
+    @Test public void unreachableTunnelKeepsRoomAndPushSubscriptionAfterRepeatedChecks() throws Exception {
+        android.content.Context context = getInstrumentation().getTargetContext();
+        String instance = java.util.UUID.randomUUID().toString();
+        // A real Cloudflare/DNS failure exercises both service checks and Activity restoration.
+        ChatConnectionService.state(context).edit()
+            .putString("url", "https://moeum-offline-" + instance + ".trycloudflare.com")
+            .putString("instance", instance).putString("cookie", "chat_session=offline-test").commit();
+        try (ActivityScenario<MainActivity> scenario = ActivityScenario.launch(MainActivity.class)) {
+            scenario.moveToState(androidx.lifecycle.Lifecycle.State.CREATED);
+            Thread.sleep(45000);
+            assertEquals("Repeated failures must not clear the room or unsubscribe push", instance,
+                ChatConnectionService.state(context).getString("instance", ""));
+            scenario.moveToState(androidx.lifecycle.Lifecycle.State.RESUMED);
+            scenario.recreate();
+            Thread.sleep(8000);
+            assertEquals("Reopening during a tunnel outage must also retain the room", instance,
+                ChatConnectionService.state(context).getString("instance", ""));
+        } finally { ChatConnectionService.disconnect(context); }
+    }
     @Test public void closedServerShowsNoticeAndKeepsEntryButton() throws Exception {
         Assume.assumeTrue(closedMode());
         try (ActivityScenario<MainActivity> scenario = ActivityScenario.launch(MainActivity.class)) {

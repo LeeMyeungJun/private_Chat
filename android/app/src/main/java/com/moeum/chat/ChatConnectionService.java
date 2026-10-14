@@ -25,8 +25,7 @@ public final class ChatConnectionService extends Service {
     private static final String CHANNEL = "moeum_connection", STOP = "disconnect";
     private Socket socket;
     private ScheduledExecutorService health;
-    private String instance;
-    private int failures;
+    private String instance, activeCookie;
     private static volatile boolean connected;
     static boolean isConnected() { return connected; }
     static SharedPreferences state(Context context) { return context.getSharedPreferences("connection", MODE_PRIVATE); }
@@ -71,18 +70,17 @@ public final class ChatConnectionService extends Service {
             .setContentTitle("모음 · 서버 연결 유지 중").setContentText("다른 앱을 사용해도 연결과 알림을 유지합니다.")
             .setContentIntent(tap).setOngoing(true).addAction(new Notification.Action.Builder(null, "연결 끊기", stop).build()).build();
         startForeground(101, notice);
-        if (requested.equals(instance) && socket != null) return START_STICKY;
-        release(); instance = requested; subscribe(this, instance, true);
+        if (requested.equals(instance) && cookie.equals(activeCookie) && socket != null) return START_STICKY;
+        release(); instance = requested; activeCookie = cookie; subscribe(this, instance, true);
         try {
             IO.Options options = new IO.Options();
             options.extraHeaders = Collections.singletonMap("Cookie", Collections.singletonList(cookie));
             options.reconnection = true; options.reconnectionAttempts = Integer.MAX_VALUE;
             options.reconnectionDelay = 1000; options.reconnectionDelayMax = 10000;
             socket = IO.socket(url, options);
-            socket.on(Socket.EVENT_CONNECT, args -> { failures = 0; connected = true; });
-            socket.on(Socket.EVENT_CONNECT_ERROR, args -> {
-                if (args.length > 0 && String.valueOf(args[0]).contains("AUTH_REQUIRED")) disconnect(this);
-            });
+            socket.on(Socket.EVENT_CONNECT, args -> { connected = true; });
+            // Authentication/network errors do not revoke a previously joined room's FCM subscription.
+            socket.on("server:closed", args -> disconnect(this));
             socket.on(Socket.EVENT_DISCONNECT, args -> {
                 connected = false;
                 if (args.length > 0 && "io server disconnect".equals(String.valueOf(args[0]))) disconnect(this);
@@ -97,10 +95,15 @@ public final class ChatConnectionService extends Service {
                 if (capabilities == null || !capabilities.hasCapability(NetworkCapabilities.NET_CAPABILITY_VALIDATED)) return;
                 try {
                     if (!new ServerLocator().alive(server)) { disconnect(this); return; }
-                    failures = 0;
-                } catch (Exception error) { if (++failures >= 3) disconnect(this); }
+                } catch (Exception ignored) {
+                    // Timeouts, Cloudflare errors and Doze are not evidence of server shutdown.
+                    // Keep the saved session and topic; Socket.IO retries independently.
+                }
             }, 10, 10, TimeUnit.SECONDS);
-        } catch (Exception error) { disconnect(this); return START_NOT_STICKY; }
+        } catch (Exception error) {
+            // Preserve push even if opening the native socket fails.
+            android.util.Log.w("MoeumConnection", "Connection setup failed; room subscription retained");
+        }
         return START_STICKY;
     }
     private void release() {
