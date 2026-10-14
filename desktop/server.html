@@ -1,0 +1,10 @@
+<!doctype html>
+<html lang="ko"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><meta http-equiv="Content-Security-Policy" content="default-src 'self'; script-src 'self'; style-src 'self'; img-src 'self'; object-src 'none'; base-uri 'none'"><title>모음 · 서버 관리</title><link rel="stylesheet" href="server.css"><script src="server-panel.js" defer></script></head>
+<body><main>
+  <header><img src="../public/mark.svg" alt=""><div><h1>모음 서버</h1><span>SERVER CONTROL</span></div><span class="live"><i></i>실행 중</span></header>
+  <section class="intro"><span class="eyebrow">YOUR SPACE, ONLINE</span><h2>대화의 연결을 관리하세요.</h2><p>채팅창을 닫아도 서버는 계속 실행됩니다.</p></section>
+  <section class="card"><div class="card-heading"><h3>외부 접속</h3><span id="public-badge" class="badge">준비 중</span></div><p id="share-status" class="description" role="status">외부 접속 주소를 준비하고 있어요.</p><div id="public-url" class="address">주소 생성 중…</div><button id="invite" class="primary" disabled>초대 주소 · 비밀번호 복사</button><button id="retry" class="secondary" hidden>외부 연결 다시 시도</button><small>서버를 다시 실행하면 새로운 주소가 생성됩니다.</small></section>
+  <section class="card chat-card"><div class="card-heading"><h3>MainPC 채팅창</h3><span id="chat-badge" class="badge">열림</span></div><p class="description">서버와 별도로 열고 닫을 수 있습니다.</p><button id="open-chat" class="secondary">채팅창으로 이동</button></section>
+  <div class="local-info"><span>로컬 서버 주소</span><code id="local-url">http://127.0.0.1:3000</code></div>
+  <footer><p><strong>이 서버 창을 닫으면</strong> 서버와 외부 연결이 종료됩니다.</p><button id="stop-server">서버 종료</button></footer><p id="panel-error" class="error" role="alert"></p>
+</main></body></html>

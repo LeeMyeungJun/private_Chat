@@ -1,0 +1,54 @@
+<!doctype html>
+<html lang="ko">
+<head>
+  <meta charset="UTF-8"><meta name="viewport" content="width=device-width,initial-scale=1,viewport-fit=cover">
+  <meta name="theme-color" content="#13131c"><meta name="description" content="우리만의 공간에서 나누는 대화, 사진, 파일.">
+  <title>모음 · Private Chat</title><link rel="icon" href="/mark.svg" type="image/svg+xml"><link rel="stylesheet" href="/style.css">
+  <script src="/socket.io/socket.io.js" defer></script><script src="/app.js" defer></script>
+</head>
+<body>
+  <svg class="icon-library" xmlns="http://www.w3.org/2000/svg" aria-hidden="true"><defs>
+    <symbol id="i-chat" viewBox="0 0 24 24"><path d="M20 11.5a8 8 0 0 1-8 8H5l-3 2v-10a8 8 0 0 1 8-8h2a8 8 0 0 1 8 8Z"/><path d="M7 10h8M7 14h5"/></symbol>
+    <symbol id="i-plus" viewBox="0 0 24 24"><path d="M12 5v14M5 12h14"/></symbol>
+    <symbol id="i-file" viewBox="0 0 24 24"><path d="M14 3H5v18h14V8Z M14 3v5h5M8 12h8M8 16h5"/></symbol>
+    <symbol id="i-search" viewBox="0 0 24 24"><circle cx="10.5" cy="10.5" r="6.5"/><path d="m16 16 5 5"/></symbol>
+    <symbol id="i-send" viewBox="0 0 24 24"><path d="m4 11 16-7-7 16-2-7Z M11 13l9-9"/></symbol>
+    <symbol id="i-arrow" viewBox="0 0 24 24"><path d="M5 12h14m-6-6 6 6-6 6"/></symbol>
+    <symbol id="i-close" viewBox="0 0 24 24"><path d="m6 6 12 12M6 18 18 6"/></symbol>
+    <symbol id="i-download" viewBox="0 0 24 24"><path d="M12 3v12m-5-5 5 5 5-5M4 16v5h16v-5"/></symbol>
+    <symbol id="i-link" viewBox="0 0 24 24"><path d="m10 14 4-4M8 16l-2 2a4 4 0 0 1-6-6l5-5a4 4 0 0 1 6 0m2 10a4 4 0 0 0 6 0l5-5a4 4 0 0 0-6-6l-2 2" transform="translate(1 0) scale(.9)"/></symbol>
+    <symbol id="i-lock" viewBox="0 0 24 24"><rect x="5" y="10" width="14" height="11" rx="3"/><path d="M8 10V7a4 4 0 0 1 8 0v3M12 14v3"/></symbol>
+    <symbol id="i-menu" viewBox="0 0 24 24"><path d="M4 6h16M4 12h16M4 18h16"/></symbol>
+    <symbol id="i-out" viewBox="0 0 24 24"><path d="M9 4H4v16h5m4-13 5 5-5 5M9 12h11"/></symbol>
+  </defs></svg>
+  <main id="login" class="login-screen">
+    <div class="login-art" aria-hidden="true"><div class="orbit orbit-one"></div><div class="orbit orbit-two"></div><div class="art-mark"><svg><use href="#i-chat"/></svg></div><div class="art-note">작은 이야기가 모이는 곳.</div><span class="art-label">YOUR PEOPLE. YOUR SPACE.</span></div>
+    <section class="login-panel">
+      <a class="brand" href="/"><img src="/mark.svg" alt=""><span>모음<span class="brand-caption">PRIVATE CHAT</span></span></a>
+      <div class="login-copy"><span class="eyebrow">A LITTLE CLOSER</span><h1>우리만의 공간에<br>어서 오세요<span>.</span></h1><p>오늘의 이야기부터 함께 나눌 파일까지.<br>편하게 들어와 대화를 시작해 보세요.</p></div>
+      <form id="login-form"><label for="nickname">어떻게 불러드릴까요?</label><input id="nickname" name="nickname" placeholder="닉네임을 입력해 주세요" maxlength="20" autocomplete="nickname" required><label for="password">입장 비밀번호</label><div class="password-field"><svg><use href="#i-lock"/></svg><input id="password" name="password" type="password" placeholder="초대받은 비밀번호" maxlength="256" autocomplete="current-password" required></div><p id="login-error" class="form-error" role="alert"></p><button class="primary login-submit" type="submit">대화에 참여하기<svg><use href="#i-arrow"/></svg></button></form>
+      <p class="login-foot"><span class="small-dot"></span> 대화와 파일은 호스트 PC에 보관됩니다.</p>
+    </section>
+  </main>
+  <div id="workspace" class="workspace" hidden>
+    <aside id="sidebar" class="sidebar">
+      <a class="brand" href="/"><img src="/mark.svg" alt=""><span>모음<span class="brand-caption">PRIVATE CHAT</span></span></a>
+      <button id="invite" class="invite-button"><svg><use href="#i-link"/></svg>초대 링크 복사<svg><use href="#i-plus"/></svg></button>
+      <span class="section-label">내 공간</span><button class="room active" id="room-button"><span class="room-icon"><svg><use href="#i-chat"/></svg></span><span><strong class="room-name">우리의 대화</strong><small>이야기, 그리고 함께 나누는 것들</small></span><span class="room-dot"></span></button>
+      <div class="member-heading"><span class="section-label">함께 있는 사람</span><span id="member-count" class="count">0</span></div><div id="members" class="members"></div>
+      <div class="sidebar-bottom"><div id="host-status" class="host-note" hidden><svg><use href="#i-link"/></svg><div><strong>MainPC 서버 실행 중</strong><p>창을 닫으면 서버도 종료됩니다.</p><div class="host-actions"><button id="host-retry" hidden>다시 연결</button></div></div></div><div class="host-note"><svg><use href="#i-lock"/></svg><div><strong>우리만의 대화 공간</strong><p>입장 비밀번호로 함께해요.</p></div></div><div class="profile"><span id="profile-avatar" class="avatar"></span><div><strong id="profile-name"></strong><small>이 공간의 멤버</small></div><button id="logout" class="icon-button" aria-label="나가기" title="나가기"><svg><use href="#i-out"/></svg></button></div></div>
+    </aside>
+    <main class="chat-main">
+      <header class="chat-header"><button id="menu-button" class="icon-button mobile-menu" aria-label="멤버 메뉴 열기"><svg><use href="#i-menu"/></svg></button><div class="header-title"><span class="header-room-icon"><svg><use href="#i-chat"/></svg></span><div><h1 class="room-name">우리의 대화</h1><span id="connection" class="connection">연결 중</span></div></div><div class="header-actions"><button id="search-button" class="icon-button" aria-label="대화 검색" title="대화 검색"><svg><use href="#i-search"/></svg></button><span class="header-divider"></span><button id="files-button" class="files-button"><svg><use href="#i-file"/></svg><span>공유 파일</span><span id="file-count" class="count">0</span></button></div></header>
+      <div id="search-bar" class="search-bar" hidden><svg><use href="#i-search"/></svg><input id="search-input" placeholder="불러온 대화에서 검색" aria-label="대화 검색어"><span id="search-count"></span><button id="search-close" class="icon-button" aria-label="검색 닫기"><svg><use href="#i-close"/></svg></button></div>
+      <div id="reconnect-banner" class="reconnect-banner" hidden role="status">연결이 끊겼습니다. 자동으로 다시 연결하고 있어요.</div>
+      <section id="messages" class="messages" aria-label="대화 내용" tabindex="0"><div class="conversation-intro"><div class="intro-icon"><svg><use href="#i-chat"/></svg></div><span class="eyebrow">OUR LITTLE SPACE</span><h2>이야기가 시작되는 곳<span>.</span></h2><p>가벼운 안부, 좋아하는 사진, 함께 볼 파일.<br>여기에 편하게 남겨 주세요.</p><div class="intro-tags"><span>실시간 대화</span><span>사진 & 파일 공유</span><span>호스트 PC에 보관</span></div></div><button id="older" class="older" hidden>이전 대화 불러오기</button><div id="message-list"></div><p id="search-empty" class="search-empty" hidden>일치하는 대화가 없습니다.</p></section>
+      <div class="composer-area"><button id="new-messages" class="new-messages" hidden>새 메시지 보기 ↓</button><div id="typing" class="typing" aria-live="polite"></div><form id="composer" class="composer"><div id="attachment-preview" class="attachment-preview" hidden></div><div id="upload-status" class="upload-status" hidden><span id="upload-label"></span><progress id="upload-progress" max="100" value="0"></progress></div><div class="composer-row"><button id="attach-button" type="button" class="attach-button" aria-label="파일 첨부" title="파일 첨부"><svg><use href="#i-plus"/></svg></button><textarea id="message-input" placeholder="메시지를 남겨 보세요…" rows="1" maxlength="5000" aria-label="메시지"></textarea><button id="send-button" type="submit" class="send-button" aria-label="메시지 보내기" title="메시지 보내기"><svg><use href="#i-send"/></svg></button></div><div class="composer-hint"><span>파일을 끌어 놓거나 이미지를 붙여넣을 수 있어요.</span><span><kbd>Enter</kbd> 전송 <span class="hint-dot">·</span> <kbd>Shift + Enter</kbd> 줄바꿈</span></div></form><div id="send-error" class="send-error" hidden role="alert"><span></span><button id="retry-button">다시 보내기</button></div><input id="file-input" type="file" multiple hidden></div>
+      <div id="drop-overlay" class="drop-overlay" hidden><div><svg><use href="#i-plus"/></svg><h2>파일을 여기에 놓아 주세요</h2><p>최대 10개 · 파일당 50MB</p></div></div>
+    </main>
+    <aside id="file-drawer" class="file-drawer" hidden><header><div><span class="eyebrow">SHARED TOGETHER</span><h2>공유 파일</h2></div><button id="files-close" class="icon-button" aria-label="공유 파일 닫기"><svg><use href="#i-close"/></svg></button></header><p class="drawer-description">대화 속 사진과 파일을 한곳에서.</p><div id="shared-files"></div></aside>
+  </div>
+  <dialog id="image-dialog" class="image-dialog"><button id="image-close" class="icon-button" aria-label="이미지 닫기"><svg><use href="#i-close"/></svg></button><img id="large-image" alt=""><a id="image-download" class="primary" download><svg><use href="#i-download"/></svg>원본 다운로드</a></dialog>
+  <div id="toast" class="toast" hidden role="status"></div>
+</body>
+</html>

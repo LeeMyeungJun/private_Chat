@@ -1,0 +1,26 @@
+{
+  "name": "private-chat",
+  "version": "1.0.0",
+  "private": true,
+  "type": "module",
+  "main": "desktop/main.cjs",
+  "scripts": {
+    "start": "electron .",
+    "server": "node server.js",
+    "test": "node --test test/chat.test.js",
+    "test:desktop": "node scripts/test-desktop.cjs",
+    "check": "node --check server.js && node --check public/app.js && node --check desktop/main.cjs && node --check desktop/tunnel-worker.cjs && node --check desktop/cloudflared.cjs"
+  },
+  "engines": {
+    "node": ">=22"
+  },
+  "dependencies": {
+    "express": "5.3.0",
+    "multer": "2.4.0",
+    "socket.io": "4.8.4"
+  },
+  "devDependencies": {
+    "electron": "44.7.2",
+    "socket.io-client": "4.8.4"
+  }
+}

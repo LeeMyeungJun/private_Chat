@@ -1,0 +1,223 @@
+import express from 'express';
+import multer from 'multer';
+import { Server } from 'socket.io';
+import { createServer } from 'node:http';
+import { randomBytes, randomUUID, scryptSync, timingSafeEqual } from 'node:crypto';
+import fs from 'node:fs';
+import path from 'node:path';
+import { fileURLToPath } from 'node:url';
+
+const root = path.dirname(fileURLToPath(import.meta.url));
+const dataDir = path.resolve(process.env.DATA_DIR || path.join(root, '.data'));
+const uploadDir = path.join(dataDir, 'uploads');
+fs.mkdirSync(uploadDir, { recursive: true });
+const settingsPath = path.join(dataDir, 'settings.json');
+let settings;
+if (fs.existsSync(settingsPath)) settings = JSON.parse(fs.readFileSync(settingsPath, 'utf8'));
+else {
+  const password = process.env.CHAT_PASSWORD || randomBytes(12).toString('base64url');
+  const salt = randomBytes(16).toString('hex');
+  settings = { roomName: '우리의 대화', salt, passwordHash: scryptSync(password, salt, 64).toString('hex') };
+  fs.writeFileSync(settingsPath, JSON.stringify(settings, null, 2), { mode: 0o600 });
+  fs.writeFileSync(path.join(dataDir, '입장비밀번호.txt'), password + '\n', { mode: 0o600 });
+}
+const historyPath = path.join(dataDir, 'messages.jsonl');
+const uploadIndexPath = path.join(dataDir, 'uploads.json');
+const uploads = Object.create(null);
+const history = [];
+let sequence = 0;
+function startFreshRoom() {
+  const target = path.resolve(uploadDir);
+  if (path.dirname(target) !== dataDir || path.basename(target) !== 'uploads') throw new Error('Invalid upload storage path');
+  fs.rmSync(target, { recursive: true, force: true });
+  fs.mkdirSync(target, { recursive: true });
+  for (const name of fs.readdirSync(dataDir)) {
+    if (name === 'messages.jsonl' || name.startsWith('messages.jsonl.recovery-') || name === 'uploads.json' || name === 'uploads.json.tmp') fs.unlinkSync(path.join(dataDir, name));
+  }
+  fs.writeFileSync(historyPath, '');
+  fs.writeFileSync(uploadIndexPath, '{}');
+}
+const sessions = new Map();
+const loginAttempts = new Map();
+const MAX_FILE_SIZE = 50 * 1024 * 1024;
+const app = express();
+app.disable('x-powered-by');
+const http = createServer(app);
+
+function sameOrigin(req) {
+  if (!req.headers.origin) return true;
+  try { return new URL(req.headers.origin).host === req.headers.host; } catch { return false; }
+}
+const io = new Server(http, { maxHttpBufferSize: 64 * 1024, allowRequest: (req, done) => done(null, sameOrigin(req)) });
+function sessionFor(req) {
+  const token = req.headers.cookie?.split(';').map(p => p.trim()).find(p => p.startsWith('chat_session='))?.slice(13);
+  const session = sessions.get(token);
+  if (session && session.expires > Date.now()) return session;
+  if (session) sessions.delete(token);
+  return null;
+}
+function requireAuth(req, res, next) {
+  req.session = sessionFor(req);
+  if (!req.session) return res.status(401).json({ error: '다시 입장해 주세요.' });
+  next();
+}
+function publicUser(session) { return { id: session.id, nickname: session.nickname }; }
+function validNickname(value) { return typeof value === 'string' && value.trim().length >= 1 && value.trim().length <= 20 && !/[\p{C}]/u.test(value); }
+app.use((req, res, next) => {
+  res.setHeader('X-Content-Type-Options', 'nosniff');
+  res.setHeader('Referrer-Policy', 'same-origin');
+  res.setHeader('X-Frame-Options', 'DENY');
+  res.setHeader('Content-Security-Policy', "default-src 'self'; connect-src 'self' ws: wss:; img-src 'self' blob: data:; style-src 'self'; script-src 'self'; object-src 'none'; frame-ancestors 'none'; base-uri 'self'; form-action 'self'");
+  if (req.path.startsWith('/api/') || req.path.startsWith('/files/')) res.setHeader('Cache-Control', 'no-store');
+  if (!['GET', 'HEAD', 'OPTIONS'].includes(req.method) && !sameOrigin(req)) return res.status(403).json({ error: '허용되지 않은 요청입니다.' });
+  next();
+});
+app.use(express.json({ limit: '32kb' }));
+app.get('/api/health', (req, res) => res.json({ ok: true }));
+app.get('/api/info', (req, res) => res.json({ roomName: settings.roomName, maxFileSize: MAX_FILE_SIZE, maxFiles: 10 }));
+app.post('/api/login', (req, res) => {
+  const ip = req.socket.remoteAddress;
+  const attempt = loginAttempts.get(ip) || { count: 0, until: Date.now() + 60000 };
+  if (attempt.until < Date.now()) { attempt.count = 0; attempt.until = Date.now() + 60000; }
+  attempt.count++;
+  loginAttempts.set(ip, attempt);
+  if (attempt.count > 20) return res.status(429).json({ error: '입장 시도가 많습니다. 1분 후 다시 시도해 주세요.' });
+  if (!validNickname(req.body.nickname)) return res.status(400).json({ error: '닉네임은 1~20자로 입력해 주세요.' });
+  if (typeof req.body.password !== 'string' || req.body.password.length > 256) return res.status(400).json({ error: '비밀번호를 확인해 주세요.' });
+  const hash = scryptSync(req.body.password, settings.salt, 64);
+  if (!timingSafeEqual(hash, Buffer.from(settings.passwordHash, 'hex'))) return res.status(403).json({ error: '입장 비밀번호가 맞지 않습니다.' });
+  const token = randomBytes(32).toString('hex');
+  const session = { id: randomUUID(), nickname: req.body.nickname.trim(), expires: Date.now() + 7 * 86400000 };
+  sessions.set(token, session);
+  const secure = req.headers['x-forwarded-proto'] === 'https' || req.socket.encrypted;
+  res.setHeader('Set-Cookie', `chat_session=${token}; HttpOnly; SameSite=Strict; Path=/; Max-Age=604800${secure ? '; Secure' : ''}`);
+  res.json({ user: publicUser(session) });
+});
+app.get('/api/me', requireAuth, (req, res) => res.json({ user: publicUser(req.session) }));
+app.post('/api/logout', requireAuth, (req, res) => {
+  for (const [token, session] of sessions) if (session === req.session) sessions.delete(token);
+  for (const socket of io.sockets.sockets.values()) if (socket.data.session === req.session) socket.disconnect(true);
+  res.setHeader('Set-Cookie', 'chat_session=; HttpOnly; SameSite=Strict; Path=/; Max-Age=0');
+  res.json({ ok: true });
+});
+app.get('/api/messages', requireAuth, (req, res) => {
+  const before = Number(req.query.before) || Infinity;
+  const after = Number(req.query.after) || 0;
+  const limit = Math.min(500, Math.max(1, Number(req.query.limit) || 100));
+  const matching = history.filter(m => m.seq < before && m.seq > after);
+  const messages = after ? matching.slice(0, limit) : matching.slice(-limit);
+  res.json({ messages, hasMore: matching.length > limit });
+});
+app.get('/api/files', requireAuth, (req, res) => {
+  const files = history.slice().reverse().flatMap(message => message.attachments.map(file => ({ ...file, nickname: message.nickname, createdAt: message.createdAt })));
+  res.json({ files: files.slice(0, 200) });
+});
+function imageType(filename) {
+  const fd = fs.openSync(filename, 'r');
+  const head = Buffer.alloc(16);
+  try { fs.readSync(fd, head, 0, 16, 0); } finally { fs.closeSync(fd); }
+  if (head.subarray(0, 8).equals(Buffer.from([137,80,78,71,13,10,26,10]))) return 'image/png';
+  if (head[0] === 255 && head[1] === 216 && head[2] === 255) return 'image/jpeg';
+  if (['GIF87a', 'GIF89a'].includes(head.subarray(0,6).toString())) return 'image/gif';
+  if (head.subarray(0,4).toString() === 'RIFF' && head.subarray(8,12).toString() === 'WEBP') return 'image/webp';
+  return null;
+}
+const upload = multer({ storage: multer.diskStorage({ destination: uploadDir, filename: (req, file, cb) => cb(null, randomUUID()) }), limits: { fileSize: MAX_FILE_SIZE, files: 10, fields: 0, parts: 10 } });
+app.post('/api/upload', requireAuth, upload.array('files', 10), (req, res, next) => {
+  try {
+    if (!req.files?.length) return res.status(400).json({ error: '첨부할 파일을 선택해 주세요.' });
+    const files = req.files.map(file => {
+      let name = file.originalname;
+      // Browser multipart names are UTF-8; Multer exposes the header as latin1.
+      const decoded = Buffer.from(name, 'latin1').toString('utf8');
+      if (!decoded.includes('\ufffd')) name = decoded;
+      name = path.basename(name.replaceAll('\\', '/')).replace(/[\p{C}]/gu, '').slice(0, 180) || '첨부파일';
+      const type = imageType(file.path);
+      return { id: file.filename, name, size: file.size, type: type || 'application/octet-stream', image: Boolean(type), owner: req.session.id };
+    });
+    for (const file of files) uploads[file.id] = file;
+    const temp = uploadIndexPath + '.tmp';
+    fs.writeFileSync(temp, JSON.stringify(uploads));
+    fs.renameSync(temp, uploadIndexPath);
+    res.json({ files });
+  } catch (error) { next(error); }
+});
+app.get('/files/:id', requireAuth, (req, res) => {
+  const file = uploads[req.params.id];
+  if (!file || (!file.published && file.owner !== req.session.id)) return res.status(404).json({ error: '파일을 찾을 수 없습니다.' });
+  const filename = path.join(uploadDir, file.id);
+  if (!fs.existsSync(filename)) return res.status(404).json({ error: '파일을 찾을 수 없습니다.' });
+  res.setHeader('Content-Type', file.type);
+  res.setHeader('Content-Disposition', `${file.image && req.query.download !== '1' ? 'inline' : 'attachment'}; filename="download"; filename*=UTF-8''${encodeURIComponent(file.name)}`);
+  res.sendFile(filename);
+});
+io.use((socket, next) => {
+  const session = sessionFor(socket.request);
+  if (!session) return next(new Error('AUTH_REQUIRED'));
+  socket.data.session = session;
+  next();
+});
+function broadcastPresence() {
+  const users = new Map();
+  for (const socket of io.sockets.sockets.values()) users.set(socket.data.session.id, publicUser(socket.data.session));
+  io.emit('presence', [...users.values()]);
+}
+io.on('connection', socket => {
+  broadcastPresence();
+  let sent = [];
+  let lastTyping = 0;
+  socket.on('typing', () => {
+    if (Date.now() - lastTyping < 1000) return;
+    lastTyping = Date.now();
+    socket.broadcast.emit('typing', publicUser(socket.data.session));
+  });
+  socket.on('message:send', (payload, ack) => {
+    const reply = typeof ack === 'function' ? ack : () => {};
+    try {
+      const session = socket.data.session;
+      if (session.expires < Date.now()) return reply({ error: '입장이 만료되었습니다. 다시 입장해 주세요.' });
+      if (!payload || typeof payload.clientId !== 'string' || !/^[0-9a-f-]{36}$/i.test(payload.clientId)) return reply({ error: '올바르지 않은 메시지입니다.' });
+      const duplicate = history.find(m => m.clientId === payload.clientId && m.userId === session.id);
+      if (duplicate) return reply({ message: duplicate });
+      const text = typeof payload.text === 'string' ? payload.text.trim() : '';
+      const ids = payload.attachments ?? [];
+      if (text.length > 5000 || !Array.isArray(ids) || ids.length > 10 || ids.some(id => typeof id !== 'string')) return reply({ error: '메시지는 5,000자, 첨부는 10개까지 가능합니다.' });
+      const attachments = [...new Set(ids)].map(id => uploads[id]);
+      if (attachments.some(file => !file || file.owner !== session.id)) return reply({ error: '첨부파일을 다시 업로드해 주세요.' });
+      if (!text && !attachments.length) return reply({ error: '메시지 또는 파일을 입력해 주세요.' });
+      sent = sent.filter(time => time > Date.now() - 10000);
+      if (sent.length >= 20) return reply({ error: '잠시 후 다시 전송해 주세요.' });
+      const message = { id: randomUUID(), seq: sequence + 1, clientId: payload.clientId, userId: session.id, nickname: session.nickname, text, attachments: attachments.map(({ owner, published, ...file }) => file), createdAt: new Date().toISOString() };
+      fs.appendFileSync(historyPath, JSON.stringify(message) + '\n');
+      sequence++;
+      history.push(message);
+      for (const file of attachments) file.published = true;
+      sent.push(Date.now());
+      io.emit('message', message);
+      reply({ message });
+    } catch (error) { console.error('Message save failed:', error.message); reply({ error: '저장에 실패했습니다. 다시 시도해 주세요.' }); }
+  });
+  socket.on('disconnect', broadcastPresence);
+});
+const housekeeping = setInterval(() => {
+  for (const [token, session] of sessions) if (session.expires < Date.now()) sessions.delete(token);
+  for (const [ip, attempt] of loginAttempts) if (attempt.until < Date.now()) loginAttempts.delete(ip);
+}, 60000);
+housekeeping.unref();
+app.use(express.static(path.join(root, 'public')));
+app.use((error, req, res, next) => {
+  console.error(error.message);
+  const tooBig = error.code === 'LIMIT_FILE_SIZE';
+  res.status(error instanceof multer.MulterError || error.type === 'entity.parse.failed' ? 400 : 500).json({ error: tooBig ? '파일 한 개의 최대 크기는 50MB입니다.' : error instanceof multer.MulterError ? '첨부파일은 한 번에 10개까지 가능합니다.' : '요청을 처리하지 못했습니다. 다시 시도해 주세요.' });
+});
+const port = Number(process.env.PORT || 3000);
+http.listen(port, '127.0.0.1', () => {
+  // A failed port bind must never wipe an already-running room.
+  startFreshRoom();
+  console.log(`Private Chat ready: http://127.0.0.1:${http.address().port}\nPassword file: ${path.join(dataDir, '입장비밀번호.txt')}`);
+});
+function shutdown() { io.close(); http.close(() => process.exit(0)); setTimeout(() => process.exit(0), 2000).unref(); }
+process.on('SIGTERM', shutdown);
+process.on('SIGINT', shutdown);
+// A desktop crash or force-close also disconnects IPC; never leave its server running.
+if (process.connected) process.on('disconnect', shutdown);
