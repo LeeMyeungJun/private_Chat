@@ -1,4 +1,5 @@
 const $ = id => document.getElementById(id);
+if (new URLSearchParams(location.search).get('client') === 'android') document.body.classList.add('android-theme');
 const state = { user: null, socket: null, messages: new Map(), files: [], pending: null, busy: false, hasMore: false, dragDepth: 0, maxSize: 50 * 1024 * 1024 };
 const mobileView = matchMedia('(max-width:760px), (max-width:1000px) and (max-height:500px)');
 let activePanel = null, panelTrigger = null, viewportFrame = 0, fullViewportHeight = 0, viewportWidth = 0;
@@ -90,7 +91,7 @@ $('password-toggle').addEventListener('click', () => {
   $('password-toggle').textContent = visible ? '숨김' : '보기'; $('password-toggle').setAttribute('aria-pressed', String(visible));
 });
 $('login-form').addEventListener('submit', async event => {
-  event.preventDefault(); const button = event.submitter; button.disabled = true; $('login-error').textContent = '';
+  event.preventDefault(); const button = event.submitter || $('login-form').querySelector('button[type="submit"]'); button.disabled = true; $('login-error').textContent = '';
   try {
     const { user } = await api('/api/login', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ nickname: $('nickname').value, password: $('password').value }) });
     try { localStorage.setItem('moeum-nickname', user.nickname); } catch { /* Optional nickname memory. */ }

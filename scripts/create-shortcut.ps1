@@ -1,8 +1,13 @@
 ﻿$projectPath = Split-Path -Parent $PSScriptRoot
 $shellObject = New-Object -ComObject WScript.Shell
-$shortcutObject = $shellObject.CreateShortcut((Join-Path $projectPath '모음 채팅.lnk'))
-$shortcutObject.TargetPath = Join-Path $projectPath 'node_modules\electron\dist\electron.exe'
-$shortcutObject.Arguments = '"' + $projectPath + '"'
-$shortcutObject.WorkingDirectory = $projectPath
-$shortcutObject.Description = '모음 개인 채팅 — 서버 관리 창과 채팅창을 따로 실행합니다.'
-$shortcutObject.Save()
+foreach ($chatLauncher in @(
+  @{ Name = '모음 서버.lnk'; Arguments = '"' + $projectPath + '"'; Description = 'MainPC 서버 관리창만 실행합니다.' },
+  @{ Name = '모음 채팅.lnk'; Arguments = '"' + $projectPath + '" --chat'; Description = '열려 있는 MainPC 서버의 채팅창만 엽니다.' }
+)) {
+  $shortcutObject = $shellObject.CreateShortcut((Join-Path $projectPath $chatLauncher.Name))
+  $shortcutObject.TargetPath = Join-Path $projectPath 'node_modules\electron\dist\electron.exe'
+  $shortcutObject.Arguments = $chatLauncher.Arguments
+  $shortcutObject.WorkingDirectory = $projectPath
+  $shortcutObject.Description = $chatLauncher.Description
+  $shortcutObject.Save()
+}

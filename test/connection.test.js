@@ -1,0 +1,34 @@
+import test from 'node:test';
+import assert from 'node:assert/strict';
+import { execFileSync } from 'node:child_process';
+import { mkdtempSync, writeFileSync, rmSync } from 'node:fs';
+import { tmpdir } from 'node:os';
+import path from 'node:path';
+import { createRequire } from 'node:module';
+const { publishConnection } = createRequire(import.meta.url)('../desktop/connection-publisher.cjs');
+
+test('connection publishing does not change the checkout/index or publish private files', async t => {
+  const root = mkdtempSync(path.join(tmpdir(), 'moeum-publisher-'));
+  t.after(() => rmSync(root, { recursive: true, force: true }));
+  const bare = path.join(root, 'remote.git'), work = path.join(root, 'work');
+  const git = (...args) => execFileSync('git', args, { encoding: 'utf8', windowsHide: true, stdio: ['pipe', 'pipe', 'pipe'] }).trim();
+  git('init', '--bare', bare); git('init', '-b', 'main', work);
+  git('-C', work, 'config', 'user.name', 'Test'); git('-C', work, 'config', 'user.email', 'test@example.com');
+  git('-C', work, 'config', `url.file://${bare.replaceAll('\\', '/')}.insteadOf`, 'https://github.com/LeeMyeungJun/private_Chat.git');
+  writeFileSync(path.join(work, 'secret.txt'), 'private-password');
+  git('-C', work, 'add', '.'); git('-C', work, 'commit', '-m', 'Initial');
+  writeFileSync(path.join(work, 'secret.txt'), 'private-chat');
+  git('-C', work, 'add', '.');
+  const head = git('-C', work, 'rev-parse', 'HEAD'), index = git('-C', work, 'write-tree');
+  await publishConnection(work, 'https://first-room.trycloudflare.com', '11111111-1111-1111-1111-111111111111');
+  await publishConnection(work, 'https://second-room.trycloudflare.com', '22222222-2222-2222-2222-222222222222');
+  assert.equal(git('-C', work, 'rev-parse', 'HEAD'), head);
+  assert.equal(git('-C', work, 'write-tree'), index);
+  assert.equal(git('--git-dir', bare, 'ls-tree', '--name-only', 'connection'), 'connection.json');
+  assert.equal(git('--git-dir', bare, 'rev-list', '--count', 'connection'), '2');
+  const descriptor = JSON.parse(git('--git-dir', bare, 'show', 'connection:connection.json'));
+  assert.equal(descriptor.url, 'https://second-room.trycloudflare.com');
+  assert.equal(descriptor.instanceId, '22222222-2222-2222-2222-222222222222');
+  assert.deepEqual(Object.keys(descriptor).sort(), ['instanceId', 'updatedAt', 'url', 'version']);
+  await assert.rejects(publishConnection(work, 'https://evil.com', descriptor.instanceId));
+});

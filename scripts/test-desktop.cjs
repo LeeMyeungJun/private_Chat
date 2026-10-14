@@ -47,6 +47,7 @@ const { io } = require('socket.io-client');
     const logs = await fs.readFile(path.join(dataDir, 'desktop.log'), 'utf8').catch(() => { throw new Error('Desktop did not initialize. Exit ' + code + ': ' + stderr); });
     assert.equal(code, 0, stderr + '\n' + logs);
     assert.match(logs, /SERVER_READY/); assert.match(logs, /WINDOW_READY/);
+    assert.match(logs, /SMOKE_SERVER_ONLY .*"chatOpen":false/);
     assert.match(logs, /SMOKE_UI .*"loggedIn":true/);
     assert.match(logs, /SMOKE_UI .*"overflow":false/);
     assert.match(logs, /SERVER_WINDOW_READY/);
@@ -90,6 +91,12 @@ const { io } = require('socket.io-client');
       console.log('PASS: force-closing desktop also terminates the external connector.');
     }
     console.log('PASS: mobile window has no overflow; force-closing desktop also stops the server through IPC disconnect.');
+    const closedLaunch = spawn(electron, ['.', '--chat'], { cwd: path.resolve(__dirname, '..'), env: desktopEnv, windowsHide: true, stdio: 'ignore' });
+    await once(closedLaunch, 'exit');
+    const closedLogs = await fs.readFile(path.join(dataDir, 'desktop.log'), 'utf8');
+    assert.match(closedLogs, /CHAT_SERVER_CLOSED/);
+    assert.equal((closedLogs.match(/SERVER_READY/g) || []).length, 2, 'Chat launcher must not start a server');
+    console.log('PASS: server launcher starts only server UI; chat launcher cannot start a closed server.');
   } finally { if (child && child.exitCode === null) child.kill(); await fs.rm(dataDir, { recursive: true, force: true }); }
 })().catch(error => { console.error(error); process.exitCode = 1; });
 async function assertStopped(pid) {

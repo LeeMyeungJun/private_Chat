@@ -39,6 +39,7 @@ function startFreshRoom() {
   fs.writeFileSync(uploadIndexPath, '{}');
 }
 const sessions = new Map();
+const instanceId = randomUUID();
 const loginAttempts = new Map();
 const MAX_FILE_SIZE = 50 * 1024 * 1024;
 const app = express();
@@ -74,7 +75,7 @@ app.use((req, res, next) => {
   next();
 });
 app.use(express.json({ limit: '32kb' }));
-app.get('/api/health', (req, res) => res.json({ ok: true }));
+app.get('/api/health', (req, res) => res.json({ ok: true, instanceId }));
 app.get('/api/info', (req, res) => res.json({ roomName: settings.roomName, maxFileSize: MAX_FILE_SIZE, maxFiles: 10, maxInlineMediaSeconds: MAX_INLINE_MEDIA_SECONDS }));
 app.post('/api/login', (req, res) => {
   const ip = req.socket.remoteAddress;

@@ -4,15 +4,19 @@ const { once } = require('node:events');
 const fs = require('node:fs');
 const path = require('node:path');
 const root = path.resolve(__dirname, '..');
+const { publishConnection } = require('./connection-publisher.cjs');
 const dataDir = path.resolve(process.env.DATA_DIR || path.join(root, '.data'));
 const port = Number(process.env.PORT || 3000);
 const localUrl = `http://127.0.0.1:${port}`;
 const smoke = Boolean(process.env.CHAT_DESKTOP_SMOKE);
+const chatOnly = process.argv.includes('--chat');
 const shareAddressPath = smoke ? path.join(dataDir, '공유주소.txt') : path.join(root, '공유주소.txt');
 if (smoke) app.setPath('userData', path.join(dataDir, 'electron-state'));
 let window, serverWindow, child, tunnelWorker, quitting = false;
 const closingChats = new WeakSet();
 let publicUrl = '', sharingBusy = false, shareStatus = '외부 접속 주소를 준비하고 있어요.';
+let connectionTimer;
+let connectionGeneration = 0;
 const logPath = path.join(dataDir, 'desktop.log');
 fs.mkdirSync(dataDir, { recursive: true });
 function log(text) { fs.appendFileSync(logPath, `${new Date().toISOString()} ${text}\n`); }
@@ -20,14 +24,25 @@ function hostInfo() { return { publicUrl, sharingBusy, shareStatus, localUrl, ch
 function publishInfo() { for (const view of [window, serverWindow]) if (view && !view.isDestroyed()) view.webContents.send('host:status', hostInfo()); }
 function authorize(event) { if (![window?.webContents, serverWindow?.webContents].includes(event.sender)) throw new Error('Unauthorized'); }
 function stopServer() {
+  clearTimeout(connectionTimer); connectionGeneration++;
   if (tunnelWorker?.connected) tunnelWorker.send({ type: 'stop' }, () => {});
   removeShareAddress();
   if (child && child.exitCode === null) { log('SERVER_STOP_REQUEST'); child.kill(); }
 }
 function removeShareAddress() { try { fs.unlinkSync(shareAddressPath); } catch (error) { if (error.code !== 'ENOENT') log('ADDRESS_REMOVE_FAILED ' + error.code); } }
 if (!app.requestSingleInstanceLock()) app.quit();
+else if (chatOnly) {
+  app.whenReady().then(() => {
+    log('CHAT_SERVER_CLOSED');
+    if (!smoke) dialog.showErrorBox('서버가 닫혀 있습니다', '모음 서버 바로가기로 서버를 먼저 열어 주세요.');
+    app.quit();
+  });
+}
 else {
-  app.on('second-instance', () => { if (serverWindow) { if (serverWindow.isMinimized()) serverWindow.restore(); serverWindow.show(); } openChat().catch(error => log('CHAT_OPEN_ERROR ' + error.message)); });
+  app.on('second-instance', (event, argv) => {
+    if (argv.includes('--chat')) openChat().catch(error => log('CHAT_OPEN_ERROR ' + error.message));
+    else if (serverWindow) { if (serverWindow.isMinimized()) serverWindow.restore(); serverWindow.show(); serverWindow.focus(); }
+  });
   app.on('before-quit', () => { quitting = true; stopServer(); });
   app.on('window-all-closed', () => app.quit());
   process.on('exit', stopServer);
@@ -83,8 +98,9 @@ async function start() {
     { label: '보기', submenu: [{ role: 'reload' }, { role: 'resetZoom' }, { role: 'zoomIn' }, { role: 'zoomOut' }, { role: 'togglefullscreen' }] }
   ]));
   await openServerWindow();
-  await openChat();
   if (smoke) {
+    log('SMOKE_SERVER_ONLY ' + JSON.stringify({ chatOpen: Boolean(window) }));
+    await serverWindow.webContents.executeJavaScript('window.moeumHost.openChat()');
     if (process.env.CHAT_TEST_TUNNEL === '1') {
       configureSharing();
       const startedAt = Date.now();
@@ -151,6 +167,7 @@ async function openChat() {
 }
 function configureSharing() {
   if (sharingBusy || quitting) return;
+  clearTimeout(connectionTimer); connectionGeneration++;
   publicUrl = ''; removeShareAddress(); sharingBusy = true;
   shareStatus = '외부 접속 주소를 생성하고 있어요.'; publishInfo();
   if (tunnelWorker?.connected) tunnelWorker.send({ type: 'stop' }, () => {});
@@ -171,12 +188,15 @@ function configureSharing() {
         if (quitting || tunnelWorker !== worker || !worker.connected) return;
         try {
           const response = await fetch(message.url + '/api/health', { signal: AbortSignal.timeout(5000) });
-          if (response.ok && (await response.json()).ok) {
+          const health = response.ok ? await response.json() : {};
+          if (health.ok) {
             if (quitting || tunnelWorker !== worker || !worker.connected) return;
             publicUrl = message.url; sharingBusy = false;
             fs.writeFileSync(shareAddressPath, publicUrl + '\n', 'utf8');
             shareStatus = '외부 접속 가능 · 다시 실행하면 주소가 바뀝니다.';
-            log('PUBLIC_READY ' + publicUrl); publishInfo(); return;
+            log('PUBLIC_READY ' + publicUrl); publishInfo();
+            if (!smoke) registerAndroid(publicUrl, health.instanceId, connectionGeneration);
+            return;
           }
         } catch { /* DNS or the edge route can need a few seconds to settle. */ }
         await new Promise(resolve => setTimeout(resolve, 1500));
@@ -188,7 +208,23 @@ function configureSharing() {
 }
 function sharingFailed(worker, text) {
   if (quitting || tunnelWorker !== worker) return;
+  clearTimeout(connectionTimer); connectionGeneration++;
   publicUrl = ''; removeShareAddress(); sharingBusy = false; shareStatus = text;
   if (worker.connected) worker.send({ type: 'stop' }, () => {});
   log('PUBLIC_ERROR ' + text); publishInfo();
+}
+
+async function registerAndroid(address, instanceId, generation) {
+  if (quitting || generation !== connectionGeneration || publicUrl !== address) return;
+  try {
+    await publishConnection(root, address, instanceId);
+    if (quitting || generation !== connectionGeneration || publicUrl !== address) return;
+    shareStatus = '외부 접속 가능 · Android 앱 입장 가능';
+    log('ANDROID_ADDRESS_READY'); publishInfo();
+  } catch (error) {
+    if (quitting || generation !== connectionGeneration || publicUrl !== address) return;
+    shareStatus = '외부 접속 가능 · 앱 주소 등록 재시도 중 (MainPC GitHub 인증 확인)';
+    log('ANDROID_ADDRESS_ERROR ' + error.message); publishInfo();
+    connectionTimer = setTimeout(() => registerAndroid(address, instanceId, generation), 60000);
+  }
 }

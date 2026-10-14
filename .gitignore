@@ -5,3 +5,10 @@ node_modules/
 *.log
 *.lnk
 공유주소.txt
+android/.gradle/
+android/.idea/
+android/local.properties
+android/**/build/
+android/captures/
+*.jks
+dist/

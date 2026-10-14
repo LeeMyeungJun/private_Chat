@@ -1,0 +1,33 @@
+/* Figma q8Oqf80owMxEvdV1afHKh9 / 3004:385. Android app only. */
+body.android-theme{--accent:#ff51cc;--text:#fff;--muted:#c9b9ce;background:#b648a1 url('/assets/figma/stage.png') center/cover fixed}
+.android-theme .workspace{padding:10px;gap:0;background:transparent}
+.android-theme .chat-main{background:#202020;border-radius:36px;overflow:hidden;min-width:0}
+.android-theme .chat-header{background:#202020;border-bottom:1px solid #ffffff12;padding-left:12px;padding-right:12px}
+.android-theme .header-title h1,.android-theme .conversation-intro h2{color:#fff}
+.android-theme .connection,.android-theme .conversation-intro p{color:#c9b9ce}
+.android-theme .messages{background:#202020;padding-left:15px;padding-right:15px}
+.android-theme .message .avatar{background:#ffbaea;color:#512342;border:1px solid #ffe2ee}
+.android-theme .message-meta strong{color:#eee0f0}.android-theme .message-meta time{color:#b5a9b7}
+.android-theme .bubble{background:#ffc0ef;color:#202020;border:0;border-radius:18px 18px 18px 4px}
+.android-theme .message:nth-of-type(even):not(.mine) .bubble{background:#e0c9ff}
+.android-theme .message.mine .bubble{background:#e0c9ff;color:#202020;border-radius:18px 18px 4px 18px}
+.android-theme .composer-area{background:#202020;padding:0 16px 16px}
+.android-theme .composer{border:0;background:#ff51cc4d;border-radius:30px;box-shadow:0 7px 14px #551ecc1a}
+.android-theme .composer-row{gap:9px;padding:9px;align-items:flex-end}
+.android-theme .attach-button,.android-theme .send-button{background:#fff;color:#ff51cc;border-radius:50%;width:44px;height:44px;box-shadow:none}
+.android-theme .attach-button svg,.android-theme .send-button svg{display:none}
+.android-theme .attach-button::after{content:url('/assets/figma/plus.svg');display:block;width:21.6px;height:21.6px}
+.android-theme .send-button::after{content:url('/assets/figma/send.svg');display:block;width:21.6px;height:21.6px}
+.android-theme .send-button:disabled{opacity:.45}
+.android-theme .composer textarea{background:#fff;color:#202020;border-radius:24px;padding:10px 13px;min-height:44px;line-height:1.5}
+.android-theme .composer textarea::placeholder{color:#757575}
+.android-theme .typing{color:#ffbaea}.android-theme .date-divider{color:#c0afc4}
+.android-theme .sidebar,.android-theme .file-drawer,.android-theme .attachment-dialog{background:#202020}
+.android-theme .login-screen{background:transparent;display:flex;align-items:center;min-height:100svh;padding:22px}
+.android-theme .login-panel{background:#202020ed;border-radius:30px;padding:28px 24px;width:100%;margin:auto}
+.android-theme .login-copy{margin-top:28px}.android-theme .login-copy h1{color:#fff}
+.android-theme .login-copy h1 span,.android-theme .eyebrow{color:#ffbaea}
+.android-theme .login-submit{background:#ff51cc;color:#202020;border-radius:28px}
+.android-theme .brand-caption{color:#c8b4ce}
+@media(min-width:761px){.android-theme .sidebar{border-radius:30px;margin-right:10px}.android-theme .composer-hint{display:none}}
+@media(max-width:360px){.android-theme .composer-area{padding-left:8px;padding-right:8px}.android-theme .composer-row{gap:6px}.android-theme .messages{padding-left:10px;padding-right:10px}}
