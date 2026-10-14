@@ -90,7 +90,9 @@ public final class MainActivity extends Activity {
             String savedCookie = ChatConnectionService.state(this).getString("cookie", "");
             if (!savedCookie.isEmpty()) CookieManager.getInstance().setCookie(savedUrl,
                 savedCookie + "; Path=/; Secure; HttpOnly; SameSite=Strict");
-            connectionStarted = true; openChat(new ServerLocator.Server(savedUrl, savedInstance));
+            connectionStarted = true;
+            startForegroundService(new Intent(this, ChatConnectionService.class));
+            restoreChat(new ServerLocator.Server(savedUrl, savedInstance), generation);
         } else if ("ring".equals(getIntent().getStringExtra("action"))) connect();
     }
 
@@ -110,7 +112,7 @@ public final class MainActivity extends Activity {
     @Override protected void onNewIntent(Intent intent) {
         super.onNewIntent(intent); setIntent(intent);
         if ("ring".equals(intent.getStringExtra("action"))) {
-            if (chat == null) connect();
+            if (chat == null && !connectionStarted) connect();
         }
     }
 
@@ -164,6 +166,29 @@ public final class MainActivity extends Activity {
         });
     }
 
+    private void restoreChat(ServerLocator.Server saved, int request) {
+        if (destroyed || request != generation) return;
+        if (!ChatConnectionService.state(this).contains("instance")) {
+            showLanding("이전 서버 연결이 종료되었습니다.\n서버 입장을 누르면 현재 서버를 찾습니다."); return;
+        }
+        enter.setEnabled(false); enter.setText("연결 확인 중…"); status.setText("연결했던 서버를 확인하고 있습니다.");
+        network.execute(() -> {
+            boolean available = false, retry = false;
+            try { available = locator.alive(saved); }
+            catch (java.io.IOException error) { retry = true; }
+            catch (Exception error) { /* A closed tunnel or a different boot cannot restore this room. */ }
+            final boolean alive = available, waitForNetwork = retry;
+            handler.post(() -> {
+                if (destroyed || request != generation) return;
+                if (alive && ChatConnectionService.state(this).contains("instance")) openChat(saved);
+                else if (waitForNetwork && ChatConnectionService.state(this).contains("instance")) {
+                    status.setText("인터넷 연결을 기다리고 있습니다. 서버 연결은 유지합니다.");
+                    handler.postDelayed(() -> restoreChat(saved, request), 10000);
+                } else showLanding("이전 서버가 종료되었습니다.\n서버 입장을 누르면 현재 서버를 찾습니다.");
+            });
+        });
+    }
+
     private boolean trusted(String address) {
         if (server == null) return false;
         try { Uri uri = Uri.parse(address), origin = Uri.parse(server.url);
@@ -178,6 +203,7 @@ public final class MainActivity extends Activity {
         root.addView(chat, new FrameLayout.LayoutParams(-1, -1));
         WebSettings settings = chat.getSettings();
         settings.setJavaScriptEnabled(true); settings.setDomStorageEnabled(true);
+        settings.setCacheMode(WebSettings.LOAD_NO_CACHE);
         settings.setAllowFileAccess(false); settings.setAllowContentAccess(false);
         settings.setMixedContentMode(WebSettings.MIXED_CONTENT_NEVER_ALLOW);
         settings.setMediaPlaybackRequiresUserGesture(true);

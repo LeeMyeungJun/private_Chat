@@ -107,10 +107,18 @@ public class EntryTest {
             assertTrue("Connection must run as a foreground service", manager.getRunningServices(Integer.MAX_VALUE).stream()
                 .anyMatch(service -> service.service.getClassName().endsWith("ChatConnectionService") && service.foreground));
             scenario.moveToState(androidx.lifecycle.Lifecycle.State.RESUMED);
+            // APK replacement can stop the service while leaving the saved connection intact.
+            runTestOnUiThread(() -> activity.stopService(new android.content.Intent(activity, ChatConnectionService.class)));
+            long stoppedDeadline = System.currentTimeMillis() + 5000;
+            while (ChatConnectionService.isConnected() && System.currentTimeMillis() < stoppedDeadline) Thread.sleep(100);
             scenario.recreate();
             scenario.onActivity(value -> current[0] = value);
             ArrayList<WebView> restoredViews = new ArrayList<>();
-            runTestOnUiThread(() -> collect(current[0].getWindow().getDecorView(), WebView.class, restoredViews));
+            long restoreDeadline = System.currentTimeMillis() + 30000;
+            while (restoredViews.isEmpty() && System.currentTimeMillis() < restoreDeadline) {
+                runTestOnUiThread(() -> collect(current[0].getWindow().getDecorView(), WebView.class, restoredViews));
+                Thread.sleep(200);
+            }
             assertEquals("Reopening the Activity should restore the connected room", 1, restoredViews.size());
             WebView restored = restoredViews.get(0);
             CountDownLatch restoredRoom = new CountDownLatch(1);
@@ -121,11 +129,45 @@ public class EntryTest {
                 Thread.sleep(200);
             }
             assertTrue("The same session must reopen without another nickname entry", restoredRoom.await(1, TimeUnit.SECONDS));
+            long resumedDeadline = System.currentTimeMillis() + 10000;
+            while (!ChatConnectionService.isConnected() && System.currentTimeMillis() < resumedDeadline) Thread.sleep(200);
+            assertTrue("Restoration must restart a stopped native connection service", ChatConnectionService.isConnected());
             runTestOnUiThread(() -> restored.evaluateJavascript("document.getElementById('logout').click()", null));
             long leaveDeadline = System.currentTimeMillis() + 10000;
             while (ChatConnectionService.state(activity).contains("instance") && System.currentTimeMillis() < leaveDeadline) Thread.sleep(200);
             assertFalse("Explicit logout must stop the background connection", ChatConnectionService.state(activity).contains("instance"));
         }
+    }
+    @Test public void staleSavedConnectionDoesNotLoadACloudflareErrorPage() throws Exception {
+        Assume.assumeFalse(closedMode());
+        android.content.Context context = getInstrumentation().getTargetContext();
+        ServerLocator.Server current = new ServerLocator().locate();
+        ChatConnectionService.state(context).edit().putString("url", current.url)
+            .putString("instance", "00000000-0000-0000-0000-000000000000")
+            .putString("cookie", "chat_session=obsolete-session").commit();
+        try (ActivityScenario<MainActivity> scenario = ActivityScenario.launch(MainActivity.class)) {
+            MainActivity[] activity = new MainActivity[1]; scenario.onActivity(value -> activity[0] = value);
+            long deadline = System.currentTimeMillis() + 15000;
+            while (ChatConnectionService.state(context).contains("instance") && System.currentTimeMillis() < deadline) Thread.sleep(200);
+            assertFalse("A saved connection to a different boot must be cleared", ChatConnectionService.state(context).contains("instance"));
+            getInstrumentation().waitForIdleSync();
+            ArrayList<WebView> views = new ArrayList<>(); ArrayList<Button> buttons = new ArrayList<>();
+            long entryDeadline = System.currentTimeMillis() + 10000;
+            while (System.currentTimeMillis() < entryDeadline) {
+                buttons.clear();
+                runTestOnUiThread(() -> collect(activity[0].getWindow().getDecorView(), Button.class, buttons));
+                if (buttons.size() == 1 && buttons.get(0).isEnabled() && "서버 입장".contentEquals(buttons.get(0).getText())) break;
+                Thread.sleep(200);
+            }
+            buttons.clear();
+            runTestOnUiThread(() -> {
+                collect(activity[0].getWindow().getDecorView(), WebView.class, views);
+                collect(activity[0].getWindow().getDecorView(), Button.class, buttons);
+            });
+            assertTrue("The stale address must never open an error WebView", views.isEmpty());
+            assertEquals(1, buttons.size()); assertEquals("서버 입장", buttons.get(0).getText().toString());
+            assertTrue(buttons.get(0).isEnabled());
+        } finally { ChatConnectionService.disconnect(context); }
     }
     @Test public void closedServerShowsNoticeAndKeepsEntryButton() throws Exception {
         Assume.assumeTrue(closedMode());
