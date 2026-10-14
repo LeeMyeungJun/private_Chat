@@ -1,5 +1,68 @@
 const $ = id => document.getElementById(id);
 const state = { user: null, socket: null, messages: new Map(), files: [], pending: null, busy: false, hasMore: false, dragDepth: 0, maxSize: 50 * 1024 * 1024 };
+const mobileView = matchMedia('(max-width:760px), (max-width:1000px) and (max-height:500px)');
+let activePanel = null, panelTrigger = null, viewportFrame = 0, fullViewportHeight = 0, viewportWidth = 0;
+function syncViewport() {
+  cancelAnimationFrame(viewportFrame);
+  const stick = state.user && nearBottom();
+  viewportFrame = requestAnimationFrame(() => {
+    const viewport = window.visualViewport;
+    if (!viewport || Math.abs(viewport.scale - 1) < .05) {
+      const height = viewport?.height || innerHeight;
+      const width = viewport?.width || innerWidth;
+      const editing = document.activeElement?.matches('input,textarea');
+      if (Math.abs(width - viewportWidth) > 40 || !editing || height > fullViewportHeight) fullViewportHeight = height;
+      viewportWidth = width;
+      document.body.classList.toggle('keyboard-open', Boolean(state.user && editing && fullViewportHeight - height > 120));
+      document.documentElement.style.setProperty('--app-height', height + 'px');
+      document.documentElement.style.setProperty('--app-top', (viewport?.offsetTop || 0) + 'px');
+      if (stick) scrollBottom();
+    }
+  });
+}
+window.visualViewport?.addEventListener('resize', syncViewport);
+window.visualViewport?.addEventListener('scroll', syncViewport);
+window.addEventListener('resize', syncViewport);
+mobileView.addEventListener('change', () => { closePanel(); syncViewport(); });
+function updateSendButton() { $('send-button').disabled = state.busy || !state.socket?.connected || (!state.pending && !$('message-input').value.trim() && !state.files.length); }
+function syncPanels() {
+  const modal = mobileView.matches && Boolean(activePanel);
+  $('sidebar').classList.toggle('open', activePanel === 'members');
+  $('file-drawer').hidden = activePanel !== 'files';
+  $('panel-backdrop').hidden = !modal;
+  document.querySelector('.chat-main').inert = modal;
+  $('sidebar').inert = modal && activePanel !== 'members';
+  for (const [kind, id, label] of [['members', 'sidebar', '함께 있는 사람'], ['files', 'file-drawer', '공유 파일']]) {
+    const panel = $(id);
+    if (modal && activePanel === kind) { panel.setAttribute('role', 'dialog'); panel.setAttribute('aria-modal', 'true'); panel.setAttribute('aria-label', label); }
+    else { panel.removeAttribute('role'); panel.removeAttribute('aria-modal'); }
+  }
+  $('menu-button').setAttribute('aria-expanded', String(activePanel === 'members'));
+  $('files-button').setAttribute('aria-expanded', String(activePanel === 'files'));
+}
+function closePanel({ back = true, restore = true } = {}) {
+  const wasOpen = Boolean(activePanel); activePanel = null; syncPanels();
+  if (restore && wasOpen) panelTrigger?.focus({ preventScroll: true });
+  if (back && wasOpen && history.state?.moeumPanel) history.back();
+}
+function togglePanel(kind, trigger) {
+  if (activePanel === kind) return closePanel();
+  if (mobileView.matches && !activePanel && !history.state?.moeumPanel) history.pushState({ ...history.state, moeumPanel: true }, '');
+  activePanel = kind; panelTrigger = trigger;
+  if (mobileView.matches) document.activeElement?.blur();
+  syncPanels();
+  if (mobileView.matches) $(kind === 'members' ? 'members-close' : 'files-close').focus({ preventScroll: true });
+}
+window.addEventListener('popstate', () => closePanel({ back: false }));
+document.addEventListener('keydown', event => {
+  if (!activePanel) return;
+  if (event.key === 'Escape') { event.preventDefault(); closePanel(); return; }
+  if (event.key !== 'Tab' || !mobileView.matches) return;
+  const panel = $(activePanel === 'members' ? 'sidebar' : 'file-drawer');
+  const controls = [...panel.querySelectorAll('button:not(:disabled), a[href], input, [tabindex="0"]')].filter(node => node.getClientRects().length);
+  const target = event.shiftKey ? controls.at(-1) : controls[0];
+  if ((event.shiftKey && document.activeElement === controls[0]) || (!event.shiftKey && document.activeElement === controls.at(-1))) { event.preventDefault(); target?.focus(); }
+});
 function icon(name) {
   const svg = document.createElementNS('http://www.w3.org/2000/svg', 'svg');
   const use = document.createElementNS('http://www.w3.org/2000/svg', 'use');
@@ -17,9 +80,15 @@ async function api(url, options = {}) {
 }
 function showLogin() {
   state.socket?.disconnect(); state.socket = null; state.user = null;
+  closePanel({ restore: false }); document.body.classList.remove('chat-active');
   $('workspace').hidden = true; $('login').hidden = false;
-  $('password').value = ''; $('nickname').focus();
+  $('password').value = ''; if (!mobileView.matches) $('nickname').focus();
+  $('password').type = 'password'; $('password-toggle').textContent = '보기'; $('password-toggle').setAttribute('aria-pressed', 'false');
 }
+$('password-toggle').addEventListener('click', () => {
+  const visible = $('password').type === 'password'; $('password').type = visible ? 'text' : 'password';
+  $('password-toggle').textContent = visible ? '숨김' : '보기'; $('password-toggle').setAttribute('aria-pressed', String(visible));
+});
 $('login-form').addEventListener('submit', async event => {
   event.preventDefault(); const button = event.submitter; button.disabled = true; $('login-error').textContent = '';
   try {
@@ -32,10 +101,12 @@ function enter(user) {
   state.user = user; state.messages.clear(); state.pending = null; state.files.forEach(file => URL.revokeObjectURL(file.preview)); state.files = [];
   $('message-list').replaceChildren(); $('message-input').value = ''; $('send-error').hidden = true; renderPreviews();
   $('login').hidden = true; $('workspace').hidden = false;
+  document.body.classList.add('chat-active'); closePanel({ restore: false }); syncViewport();
   $('profile-name').textContent = user.nickname; $('profile-avatar').textContent = initials(user.nickname);
   $('file-drawer').hidden = true; $('search-bar').hidden = true; $('search-input').value = '';
   const socket = io({ autoConnect: false }); state.socket = socket;
   socket.on('connect', async () => {
+    updateSendButton();
     $('connection').textContent = '연결됨 · 함께 이야기해요'; $('connection').classList.add('online'); $('reconnect-banner').hidden = true;
     try {
       if (!state.messages.size) { const data = await api('/api/messages'); data.messages.forEach(message => state.messages.set(message.id, message)); state.hasMore = data.hasMore; renderMessages(true); }
@@ -51,6 +122,7 @@ function enter(user) {
     } catch (error) { toast(error.message); }
   });
   socket.on('disconnect', reason => {
+    updateSendButton();
     $('connection').textContent = '연결을 기다리는 중'; $('connection').classList.remove('online'); $('reconnect-banner').hidden = false;
     if (reason === 'io server disconnect') showLogin();
   });
@@ -78,7 +150,7 @@ function enter(user) {
     $('typing').textContent = [...typingUsers.values()].map(u => u.name).slice(0, 3).join(', ') + (typingUsers.size ? ' 님이 입력 중이에요…' : '');
     if (typingUsers.size) updateTyping.timer = setTimeout(updateTyping, 700);
   }
-  socket.connect(); $('message-input').focus();
+  socket.connect(); if (!mobileView.matches) $('message-input').focus();
 }
 function nearBottom() { return $('messages').scrollHeight - $('messages').scrollTop - $('messages').clientHeight < 110; }
 function scrollBottom() { $('messages').scrollTop = $('messages').scrollHeight; $('new-messages').hidden = true; }
@@ -100,6 +172,7 @@ function renderMessages(stick = false) {
   const list = $('message-list'); list.replaceChildren();
   const query = $('search-input').value.trim().toLocaleLowerCase();
   const sorted = [...state.messages.values()].sort((a, b) => a.seq - b.seq);
+  $('workspace').classList.toggle('has-messages', sorted.length > 0);
   let previousDate = '', found = 0;
   for (const message of sorted) {
     if (query && ![message.text, message.nickname, ...message.attachments.map(f => f.name)].join(' ').toLocaleLowerCase().includes(query)) continue;
@@ -170,6 +243,7 @@ function addFiles(files) {
   renderPreviews();
 }
 function renderPreviews() {
+  updateSendButton();
   const container = $('attachment-preview'); container.replaceChildren(); container.hidden = !state.files.length;
   state.files.forEach((item, index) => {
     const row = element('div', 'preview-item');
@@ -180,8 +254,11 @@ function renderPreviews() {
     row.append(detail, remove); container.append(row);
   });
 }
-$('attach-button').addEventListener('click', () => $('file-input').click());
-$('file-input').addEventListener('change', event => { addFiles([...event.target.files]); event.target.value = ''; });
+$('attach-button').addEventListener('click', () => { if (mobileView.matches) { $('message-input').blur(); $('attachment-dialog').showModal(); } else $('file-input').click(); });
+for (const id of ['file-input', 'photo-input', 'camera-input']) $(id).addEventListener('change', event => { addFiles([...event.target.files]); event.target.value = ''; });
+$('attachment-close').addEventListener('click', () => $('attachment-dialog').close());
+$('attachment-dialog').addEventListener('click', event => { if (event.target === $('attachment-dialog')) $('attachment-dialog').close(); });
+for (const [button, input] of [['choose-photo','photo-input'], ['choose-camera','camera-input'], ['choose-file','file-input']]) $(button).addEventListener('click', () => { $('attachment-dialog').close(); $(input).click(); });
 $('message-input').addEventListener('paste', event => {
   const files = [...event.clipboardData.items].filter(item => item.kind === 'file').map(item => item.getAsFile()).filter(Boolean);
   if (files.length) { event.preventDefault(); addFiles(files); }
@@ -196,8 +273,10 @@ document.addEventListener('drop', event => {
   if (!state.user) return;
   event.preventDefault(); state.dragDepth = 0; $('drop-overlay').hidden = true; addFiles([...event.dataTransfer.files]);
 });
-$('message-input').addEventListener('input', () => { const input = $('message-input'); input.style.height = 'auto'; input.style.height = Math.min(160, input.scrollHeight) + 'px'; if (state.socket?.connected) state.socket.emit('typing'); });
-$('message-input').addEventListener('keydown', event => { if (event.key === 'Enter' && !event.shiftKey && !event.isComposing) { event.preventDefault(); $('composer').requestSubmit(); } });
+$('message-input').addEventListener('input', () => { const input = $('message-input'); const stick = nearBottom(); input.style.height = 'auto'; input.style.height = Math.min(mobileView.matches ? 120 : 160, input.scrollHeight) + 'px'; updateSendButton(); if (stick) scrollBottom(); if (state.socket?.connected) state.socket.emit('typing'); });
+$('message-input').addEventListener('beforeinput', event => { if (state.busy) event.preventDefault(); });
+$('message-input').addEventListener('keydown', event => { if (!mobileView.matches && event.key === 'Enter' && !event.shiftKey && !event.isComposing) { event.preventDefault(); $('composer').requestSubmit(); } });
+$('send-button').addEventListener('pointerdown', event => { if (document.activeElement === $('message-input')) event.preventDefault(); });
 function uploadFiles(files) {
   return new Promise((resolve, reject) => {
     const request = new XMLHttpRequest(); request.open('POST', '/api/upload'); request.timeout = 10 * 60 * 1000;
@@ -213,13 +292,14 @@ function uploadFiles(files) {
   });
 }
 function setBusy(value) {
-  state.busy = value; $('send-button').disabled = value; $('attach-button').disabled = value || Boolean(state.pending);
-  $('message-input').readOnly = value || Boolean(state.pending); $('retry-button').disabled = value; renderPreviews();
+  state.busy = value; updateSendButton(); $('attach-button').disabled = value || Boolean(state.pending);
+  $('message-input').readOnly = !value && Boolean(state.pending); $('retry-button').disabled = value; renderPreviews();
 }
 async function send() {
   if (state.busy) return;
   if (!state.socket?.connected) { toast('연결을 기다린 뒤 다시 보내 주세요.'); return; }
   if (!state.pending && !$('message-input').value.trim() && !state.files.length) return;
+  const focusComposer = !mobileView.matches || document.activeElement === $('message-input');
   $('send-error').hidden = true;
   if (!state.pending) state.pending = { clientId: crypto.randomUUID(), text: $('message-input').value.trim(), attachments: null };
   setBusy(true);
@@ -234,18 +314,19 @@ async function send() {
     // Upload failures are safe to edit. Unacknowledged messages retain their ID for retry.
     if (state.pending && !state.pending.attachments) state.pending = null;
     $('send-error').hidden = false; $('send-error').querySelector('span').textContent = error.message;
-  } finally { setBusy(false); if (!state.pending) $('message-input').focus(); }
+  } finally { setBusy(false); if (!state.pending && focusComposer) $('message-input').focus(); }
 }
 $('composer').addEventListener('submit', event => { event.preventDefault(); send(); });
 $('retry-button').addEventListener('click', send);
 $('search-button').addEventListener('click', () => { $('search-bar').hidden = !$('search-bar').hidden; if (!$('search-bar').hidden) $('search-input').focus(); else { $('search-input').value = ''; renderMessages(); } });
 $('search-close').addEventListener('click', () => { $('search-bar').hidden = true; $('search-input').value = ''; renderMessages(); });
 $('search-input').addEventListener('input', () => renderMessages());
-$('files-button').addEventListener('click', () => { $('file-drawer').hidden = !$('file-drawer').hidden; if (!$('file-drawer').hidden) refreshFiles(); });
-$('files-close').addEventListener('click', () => $('file-drawer').hidden = true);
-$('menu-button').addEventListener('click', () => $('sidebar').classList.toggle('open'));
-$('room-button').addEventListener('click', () => $('sidebar').classList.remove('open'));
-document.addEventListener('click', event => { if (!event.target.closest('#sidebar') && !event.target.closest('#menu-button')) $('sidebar').classList.remove('open'); });
+$('files-button').addEventListener('click', () => { togglePanel('files', $('files-button')); if (activePanel === 'files') refreshFiles(); });
+$('files-close').addEventListener('click', () => closePanel());
+$('menu-button').addEventListener('click', () => togglePanel('members', $('menu-button')));
+$('members-close').addEventListener('click', () => closePanel());
+$('panel-backdrop').addEventListener('click', () => closePanel());
+$('room-button').addEventListener('click', () => closePanel());
 $('invite').addEventListener('click', async () => {
   if (window.moeumHost) { try { const result = await window.moeumHost.invite(); if (result.copied) toast('초대 정보를 복사했어요.'); } catch (error) { toast(error.message); } return; }
   if (['127.0.0.1','localhost'].includes(location.hostname)) { toast('MainPC에서는 공유주소.txt의 외부 접속 주소를 전달해 주세요.'); return; }
@@ -253,6 +334,8 @@ $('invite').addEventListener('click', async () => {
 });
 $('logout').addEventListener('click', async () => { try { await api('/api/logout', { method: 'POST' }); showLogin(); } catch (error) { toast(error.message); } });
 async function boot() {
+  syncViewport();
+  if (history.state?.moeumPanel) { const { moeumPanel, ...other } = history.state; history.replaceState(other, ''); }
   if (window.moeumHost) {
     const updateHost = info => {
       $('host-status').hidden = true; $('host-status').querySelector('strong').textContent = info.publicUrl ? '초대 준비 완료' : 'MainPC 서버 실행 중';
