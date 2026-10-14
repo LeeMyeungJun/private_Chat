@@ -1,6 +1,10 @@
 const $ = id => document.getElementById(id);
 if (new URLSearchParams(location.search).get('client') === 'android') document.body.classList.add('android-theme');
-const state = { user: null, socket: null, messages: new Map(), files: [], pending: null, busy: false, hasMore: false, dragDepth: 0, maxSize: 50 * 1024 * 1024 };
+if (document.body.classList.contains('android-theme')) {
+  document.getElementById('logout').setAttribute('aria-label', '서버 연결 끊기');
+  document.getElementById('logout').title = '서버 연결 끊기';
+}
+const state = { pushEnabled: false, ringSending: false, ringUntil: 0, user: null, socket: null, messages: new Map(), files: [], pending: null, busy: false, hasMore: false, dragDepth: 0, maxSize: 50 * 1024 * 1024 };
 const mobileView = matchMedia('(max-width:760px), (max-width:1000px) and (max-height:500px)');
 let activePanel = null, panelTrigger = null, viewportFrame = 0, fullViewportHeight = 0, viewportWidth = 0;
 function syncViewport() {
@@ -80,6 +84,7 @@ async function api(url, options = {}) {
   return data;
 }
 function showLogin() {
+  window.MoeumConnection?.disconnect();
   state.socket?.disconnect(); state.socket = null; state.user = null;
   closePanel({ restore: false }); document.body.classList.remove('chat-active');
   $('workspace').hidden = true; $('login').hidden = false;
@@ -102,7 +107,8 @@ function enter(user) {
   $('file-drawer').hidden = true; $('search-bar').hidden = true; $('search-input').value = '';
   const socket = io({ autoConnect: false }); state.socket = socket;
   socket.on('connect', async () => {
-    updateSendButton();
+    window.MoeumConnection?.connected();
+    updateSendButton(); updateRingButton();
     $('connection').textContent = '연결됨 · 함께 이야기해요'; $('connection').classList.add('online'); $('reconnect-banner').hidden = true;
     try {
       if (!state.messages.size) { const data = await api('/api/messages'); data.messages.forEach(message => state.messages.set(message.id, message)); state.hasMore = data.hasMore; renderMessages(true); }
@@ -118,13 +124,14 @@ function enter(user) {
     } catch (error) { toast(error.message); }
   });
   socket.on('disconnect', reason => {
-    updateSendButton();
+    updateSendButton(); updateRingButton();
     $('connection').textContent = '연결을 기다리는 중'; $('connection').classList.remove('online'); $('reconnect-banner').hidden = false;
     if (reason === 'io server disconnect') showLogin();
   });
   socket.on('connect_error', error => {
     if (error.message === 'AUTH_REQUIRED') { showLogin(); $('login-error').textContent = '서버가 재시작되었거나 입장이 만료되었습니다. 다시 입장해 주세요.'; }
   });
+  socket.on('notification:ring', notice => toast(notice.nickname + ' 님이 모바일 알림을 울렸어요.'));
   socket.on('message', addMessage);
   socket.on('presence', users => {
     $('member-count').textContent = users.length; $('members').replaceChildren();
@@ -190,7 +197,7 @@ function renderMessages(stick = false) {
   $('workspace').classList.toggle('has-messages', sorted.length > 0);
   let previousDate = '', found = 0;
   for (const message of sorted) {
-    if (query && ![message.text, message.nickname, ...message.attachments.map(f => f.name)].join(' ').toLocaleLowerCase().includes(query)) continue;
+    if (query && ![message.title || '', message.text, message.nickname, ...message.attachments.map(f => f.name)].join(' ').toLocaleLowerCase().includes(query)) continue;
     found++;
     const created = new Date(message.createdAt);
     const day = created.toLocaleDateString('ko-KR', { year: 'numeric', month: 'long', day: 'numeric', weekday: 'short' });
@@ -202,7 +209,12 @@ function renderMessages(stick = false) {
     const body = element('div', 'message-body'), meta = element('div', 'message-meta');
     const time = element('time', '', created.toLocaleTimeString('ko-KR', { hour: '2-digit', minute: '2-digit', hour12: false })); time.dateTime = message.createdAt;
     meta.append(element('strong', '', message.nickname), time); body.append(meta);
-    if (message.text) body.append(element('div', 'bubble', message.text));
+    if (message.kind === 'announcement') {
+      row.classList.add('announcement');
+      const notice = element('div', 'bubble');
+      notice.append(element('strong', 'announcement-title', message.title), element('div', '', message.text));
+      body.append(notice);
+    } else if (message.text) body.append(element('div', 'bubble', message.text));
     if (message.attachments.length) {
       const attachments = element('div', 'message-attachments');
       for (const file of message.attachments) {
@@ -358,7 +370,24 @@ async function boot() {
   syncViewport();
   if (history.state?.moeumPanel) { const { moeumPanel, ...other } = history.state; history.replaceState(other, ''); }
   try { $('nickname').value = localStorage.getItem('moeum-nickname') || ''; } catch { /* Storage can be disabled. */ }
-  try { const info = await api('/api/info'); state.maxSize = info.maxFileSize; document.querySelectorAll('.room-name').forEach(node => node.textContent = info.roomName); } catch { $('login-error').textContent = '서버에 연결할 수 없습니다. 잠시 후 새로고침해 주세요.'; }
+  try { const info = await api('/api/info'); state.maxSize = info.maxFileSize; state.pushEnabled = Boolean(info.pushEnabled); updateRingButton(); document.querySelectorAll('.room-name').forEach(node => node.textContent = info.roomName); } catch { $('login-error').textContent = '서버에 연결할 수 없습니다. 잠시 후 새로고침해 주세요.'; }
   try { const { user } = await api('/api/me'); enter(user); } catch { /* First visit requires login. */ }
 }
 boot();
+
+function updateRingButton() {
+  const button = $('ring-button');
+  button.disabled = !state.pushEnabled || !state.socket?.connected || state.ringSending || Date.now() < state.ringUntil;
+  button.title = state.pushEnabled ? '모바일 알림 울리기' : '서버의 모바일 알림 연결을 준비 중입니다.';
+}
+$('ring-button').addEventListener('click', async () => {
+  if (!state.socket?.connected || !state.pushEnabled || state.ringSending) return;
+  state.ringSending = true; updateRingButton();
+  try {
+    const result = await state.socket.timeout(10000).emitWithAck('notification:ring', {});
+    if (!result.ok) throw new Error(result.error || '알림을 보내지 못했습니다.');
+    state.ringUntil = Date.now() + result.cooldownMs;
+    setTimeout(updateRingButton, result.cooldownMs + 50);
+  } catch (error) { toast(error.message === 'operation has timed out' ? '알림 응답을 기다리다 시간이 지났어요. 연결을 확인해 주세요.' : error.message); }
+  finally { state.ringSending = false; updateRingButton(); }
+});

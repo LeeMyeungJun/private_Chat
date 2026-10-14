@@ -12,3 +12,5 @@ android/**/build/
 android/captures/
 *.jks
 dist/
+android/app/google-services.json
+*service-account*.json

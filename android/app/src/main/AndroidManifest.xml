@@ -1,12 +1,22 @@
 <?xml version="1.0" encoding="utf-8"?>
 <manifest xmlns:android="http://schemas.android.com/apk/res/android">
     <uses-permission android:name="android.permission.INTERNET" />
+    <uses-permission android:name="android.permission.POST_NOTIFICATIONS" />
+    <uses-permission android:name="android.permission.FOREGROUND_SERVICE" />
+    <uses-permission android:name="android.permission.FOREGROUND_SERVICE_REMOTE_MESSAGING" />
+    <uses-permission android:name="android.permission.ACCESS_NETWORK_STATE" />
     <application android:label="모음 채팅" android:theme="@style/AppTheme"
         android:icon="@drawable/ic_chat" android:allowBackup="false" android:dataExtractionRules="@xml/no_backup"
         android:usesCleartextTraffic="false" android:supportsRtl="true">
         <provider android:name=".CameraProvider" android:authorities="${applicationId}.camera"
             android:exported="false" android:grantUriPermissions="true" />
-        <activity android:name=".MainActivity" android:exported="true"
+        <service android:name=".ChatMessagingService" android:exported="false">
+            <intent-filter><action android:name="com.google.firebase.MESSAGING_EVENT" /></intent-filter>
+        </service>
+        <service android:name=".ChatConnectionService" android:exported="false" android:foregroundServiceType="remoteMessaging" android:stopWithTask="false" />
+        <meta-data android:name="com.google.firebase.messaging.default_notification_icon" android:resource="@drawable/ic_notification" />
+        <meta-data android:name="com.google.firebase.messaging.default_notification_channel_id" android:value="moeum_ring" />
+        <activity android:name=".MainActivity" android:exported="true" android:launchMode="singleTop"
             android:windowSoftInputMode="adjustResize" android:configChanges="orientation|screenSize|keyboardHidden">
             <intent-filter>
                 <action android:name="android.intent.action.MAIN" />

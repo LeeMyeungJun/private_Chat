@@ -1,0 +1,30 @@
+import test from 'node:test';
+import assert from 'node:assert/strict';
+import { ringMessage, createRingController, configurePush } from '../push-notifications.js';
+import os from 'node:os';
+import path from 'node:path';
+
+test('Chat server push sends only ring notice, throttles concurrent requests and handles unavailable configuration', async () => {
+  const sent = []; let now = 100;
+  const ring = createRingController({ send: async message => sent.push(message), clock: () => now });
+  assert.equal((await ring('친구', 'boot-id')).ok, true);
+  assert.equal(sent.length, 1);
+  assert.deepEqual(sent[0], ringMessage('친구', 'boot-id'));
+  assert.equal(sent[0].android.ttl, 60000);
+  assert.equal(sent[0].topic, 'moeum-room-boot-id');
+  const notice = ringMessage('서버', 'boot-id', { title: '공지', body: '🙂'.repeat(200), messageId: 'notice-id' });
+  assert.equal(notice.data.messageId, 'notice-id'); assert.equal(notice.notification.title, '공지');
+  assert.equal(Array.from(notice.notification.body).length, 161);
+  assert.ok(!JSON.stringify(sent[0]).includes('password'));
+  assert.ok((await ring('친구', 'boot-id')).error);
+  now += 15000;
+  assert.equal((await ring('친구', 'boot-id')).ok, true);
+  let release;
+  const busy = createRingController({ send: () => new Promise(resolve => release = resolve) });
+  const first = busy('친구', 'boot-id');
+  assert.ok((await busy('친구', 'boot-id')).error); release(); await first;
+  const failing = createRingController({ send: async () => { throw new Error('private-key-must-not-leak'); } });
+  assert.ok(!(await failing('친구', 'boot-id')).error.includes('private-key'));
+  const unavailable = configurePush(path.join(os.tmpdir(), 'moeum-missing-' + crypto.randomUUID()));
+  assert.equal(unavailable.enabled, false); assert.ok((await unavailable.ring('친구', 'boot-id')).error);
+});

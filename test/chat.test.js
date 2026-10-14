@@ -13,7 +13,7 @@ test('nickname-only entry, files, retry deduplication and a fresh room on every 
   const sockets = [];
   t.after(async () => { sockets.forEach(socket => socket.close()); if (child?.exitCode === null) { child.kill(); await once(child, 'exit'); } await rm(dataDir, { recursive: true, force: true }); });
   async function start() {
-    child = spawn(process.execPath, ['server.js'], { cwd: process.cwd(), env: { ...process.env, PORT: '0', DATA_DIR: dataDir }, stdio: ['ignore', 'pipe', 'pipe'] });
+    child = spawn(process.execPath, ['server.js'], { cwd: process.cwd(), env: { ...process.env, PORT: '0', DATA_DIR: dataDir }, stdio: ['ignore', 'pipe', 'pipe', 'ipc'] });
     let stderr = ''; child.stderr.on('data', data => stderr += data);
     return await new Promise((resolve, reject) => {
       const timer = setTimeout(() => reject(new Error('Startup timed out: ' + stderr)), 10000);
@@ -115,4 +115,22 @@ test('nickname-only entry, files, retry deduplication and a fresh room on every 
   assert.equal(await readFile(path.join(dataDir, 'messages.jsonl'), 'utf8'), '');
   assert.deepEqual(JSON.parse(await readFile(path.join(dataDir, 'uploads.json'), 'utf8')), {});
   assert.ok(!(await readdir(dataDir)).includes('messages.jsonl.recovery-old'));
+  const member = await connect(returning.cookie);
+  const payloadNotice = { clientId: crypto.randomUUID(), title: '서버 안내', body: '<script>실행되지 않는 공지</script>\n자세한 내용입니다.' };
+  const noticeDelivered = once(member, 'message');
+  async function announce(payload) {
+    const requestId = crypto.randomUUID(); const reply = once(child, 'message');
+    child.send({ type: 'admin:announcement', requestId, payload });
+    const [response] = await reply; assert.equal(response.requestId, requestId); return response.result;
+  }
+  const notice = await announce(payloadNotice);
+  assert.equal(notice.message.kind, 'announcement'); assert.equal(notice.message.nickname, '서버 공지');
+  assert.equal(notice.message.title, payloadNotice.title); assert.equal(notice.message.text, payloadNotice.body);
+  assert.equal((await noticeDelivered)[0].id, notice.message.id);
+  assert.equal(notice.pushSent, false); assert.ok(notice.warning);
+  assert.equal((await announce(payloadNotice)).message.id, notice.message.id);
+  const persisted = await (await fetch(base + '/api/messages', { headers: { Cookie: returning.cookie } })).json();
+  assert.equal(persisted.messages.length, 1); assert.equal(persisted.messages[0].title, payloadNotice.title);
+  assert.ok((await announce({ clientId: crypto.randomUUID(), title: '', body: 'invalid' })).error);
+  assert.equal((await fetch(base + '/api/admin/announcement', { method: 'POST', headers: { Cookie: returning.cookie } })).status, 404);
 });

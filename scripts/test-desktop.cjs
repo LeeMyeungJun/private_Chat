@@ -39,8 +39,9 @@ const { io } = require('socket.io-client');
     assert.fail('Server is still running');
   }
   try {
-    const server = launch(['.']);
+    const server = launch(['.'], { CHAT_SMOKE_ANNOUNCE: '1' });
     const initial = await waitLog('desktop.log', /SMOKE_SERVER_UI/);
+    await waitLog('desktop.log', /SMOKE_ANNOUNCEMENT \{"kind":"announcement","pushSent":false,"warning":true\}/);
     assert.match(initial, /"hasChatControl":false,"hasStopControl":true,"overflow":false,"windows":1/);
     await assert.rejects(fs.access(path.join(dataDir, 'desktop-client-pid.txt')));
     let publicUrl;

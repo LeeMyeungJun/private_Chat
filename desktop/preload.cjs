@@ -4,6 +4,7 @@ contextBridge.exposeInMainWorld('moeumHost', {
   invite: () => ipcRenderer.invoke('host:invite'),
   retrySharing: () => ipcRenderer.invoke('host:retry-sharing'),
   quitServer: () => ipcRenderer.invoke('host:quit'),
+  announce: payload => ipcRenderer.invoke('host:announce', payload),
   onStatus: callback => ipcRenderer.on('host:status', (event, info) => callback(info)),
   onInvite: callback => ipcRenderer.on('host:invite-open', () => callback())
 });

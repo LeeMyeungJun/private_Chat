@@ -17,6 +17,7 @@ import android.view.View;
 import android.view.WindowInsets;
 import android.view.WindowInsetsController;
 import android.webkit.CookieManager;
+import android.webkit.JavascriptInterface;
 import android.webkit.SslErrorHandler;
 import android.net.http.SslError;
 import android.webkit.ValueCallback;
@@ -34,6 +35,8 @@ import android.widget.LinearLayout;
 import android.widget.TextView;
 import android.widget.Toast;
 import android.widget.ImageView;
+import com.google.firebase.FirebaseApp;
+import com.google.firebase.messaging.FirebaseMessaging;
 import java.io.File;
 import java.io.InputStream;
 import java.io.OutputStream;
@@ -56,6 +59,7 @@ public final class MainActivity extends Activity {
     private ServerLocator.Server server;
     private int generation;
     private boolean destroyed;
+    private boolean connectionStarted;
     private ValueCallback<Uri[]> fileCallback;
     private Uri cameraUri;
     private String downloadUrl, downloadCookie;
@@ -79,6 +83,35 @@ public final class MainActivity extends Activity {
             return android.os.Build.VERSION.SDK_INT >= 30 ? WindowInsets.CONSUMED : insets.consumeSystemWindowInsets();
         });
         buildLanding();
+        configurePush();
+        String savedUrl = ChatConnectionService.state(this).getString("url", "");
+        String savedInstance = ChatConnectionService.state(this).getString("instance", "");
+        if (ServerLocator.allowedAddress(savedUrl) && savedInstance.matches("[0-9a-f-]{36}")) {
+            String savedCookie = ChatConnectionService.state(this).getString("cookie", "");
+            if (!savedCookie.isEmpty()) CookieManager.getInstance().setCookie(savedUrl,
+                savedCookie + "; Path=/; Secure; HttpOnly; SameSite=Strict");
+            connectionStarted = true; openChat(new ServerLocator.Server(savedUrl, savedInstance));
+        } else if ("ring".equals(getIntent().getStringExtra("action"))) connect();
+    }
+
+    private void configurePush() {
+        if (FirebaseApp.initializeApp(this) == null) return;
+        PushNotifications.channel(this);
+        FirebaseMessaging.getInstance().unsubscribeFromTopic("moeum-room");
+        ChatConnectionService.subscribe(this, ChatConnectionService.state(this).getString("instance", null), true);
+        if (android.os.Build.VERSION.SDK_INT >= 33
+            && checkSelfPermission(android.Manifest.permission.POST_NOTIFICATIONS) != android.content.pm.PackageManager.PERMISSION_GRANTED
+            && !getPreferences(MODE_PRIVATE).getBoolean("notificationPermissionAsked", false)) {
+            getPreferences(MODE_PRIVATE).edit().putBoolean("notificationPermissionAsked", true).apply();
+            requestPermissions(new String[]{android.Manifest.permission.POST_NOTIFICATIONS}, 30);
+        }
+    }
+
+    @Override protected void onNewIntent(Intent intent) {
+        super.onNewIntent(intent); setIntent(intent);
+        if ("ring".equals(intent.getStringExtra("action"))) {
+            if (chat == null) connect();
+        }
     }
 
     private int dp(int size) { return Math.round(size * getResources().getDisplayMetrics().density); }
@@ -88,6 +121,8 @@ public final class MainActivity extends Activity {
             getWindow().getInsetsController().setSystemBarsAppearance(0,
                 WindowInsetsController.APPEARANCE_LIGHT_STATUS_BARS | WindowInsetsController.APPEARANCE_LIGHT_NAVIGATION_BARS);
         } else getWindow().getDecorView().setSystemUiVisibility(0);
+        if (connectionStarted && !ChatConnectionService.state(this).contains("instance"))
+            showLanding("서버 연결이 종료되었습니다. 다시 입장해 주세요.");
     }
     private TextView text(String value, int size, int color) {
         TextView view = new TextView(this); view.setText(value); view.setTextSize(size);
@@ -148,6 +183,28 @@ public final class MainActivity extends Activity {
         settings.setMediaPlaybackRequiresUserGesture(true);
         CookieManager.getInstance().setAcceptCookie(true);
         CookieManager.getInstance().setAcceptThirdPartyCookies(chat, false);
+        chat.addJavascriptInterface(new Object() {
+            @JavascriptInterface public void connected() {
+                handler.post(() -> {
+                    if (destroyed || server == null || chat == null) return;
+                    String cookie = CookieManager.getInstance().getCookie(server.url);
+                    if (cookie == null || !cookie.contains("chat_session=")) return;
+                    ChatConnectionService.state(MainActivity.this).edit().putString("url", server.url)
+                        .putString("instance", server.instanceId).putString("cookie", cookie).apply();
+                    if (!connectionStarted) {
+                        connectionStarted = true;
+                        startForegroundService(new Intent(MainActivity.this, ChatConnectionService.class));
+                    }
+                });
+            }
+            @JavascriptInterface public void disconnect() {
+                handler.post(() -> {
+                    if (!connectionStarted) return;
+                    ChatConnectionService.disconnect(MainActivity.this);
+                    showLanding("서버 연결을 끊었습니다. 다시 입장할 수 있습니다.");
+                });
+            }
+        }, "MoeumConnection");
         chat.setWebViewClient(new WebViewClient() {
             @Override public boolean shouldOverrideUrlLoading(WebView view, WebResourceRequest request) {
                 Uri address = request.getUrl();
@@ -159,10 +216,10 @@ public final class MainActivity extends Activity {
                 return false;
             }
             @Override public void onReceivedError(WebView view, WebResourceRequest request, WebResourceError error) {
-                if (request.isForMainFrame()) showLanding("서버에 연결할 수 없습니다.\nMainPC 서버와 인터넷 연결을 확인해 주세요.");
+                if (request.isForMainFrame() && !connectionStarted) showLanding("서버에 연결할 수 없습니다.\n서버와 인터넷 연결을 확인해 주세요.");
             }
             @Override public void onReceivedHttpError(WebView view, WebResourceRequest request, WebResourceResponse response) {
-                if (request.isForMainFrame() && response.getStatusCode() >= 500) showLanding("서버가 닫혀 있습니다.\nMainPC에서 서버를 열어 주세요.");
+                if (request.isForMainFrame() && response.getStatusCode() >= 500 && !connectionStarted) showLanding("서버가 닫혀 있습니다.\n서버를 열어 주세요.");
             }
             @Override public void onReceivedSslError(WebView view, SslErrorHandler handler, SslError error) {
                 handler.cancel(); showLanding("안전한 서버 연결을 확인할 수 없습니다.");
@@ -194,21 +251,14 @@ public final class MainActivity extends Activity {
     private void scheduleHealth(int request) {
         handler.postDelayed(() -> {
             if (destroyed || chat == null || request != generation) return;
-            ServerLocator.Server current = server;
-            network.execute(() -> {
-                boolean available;
-                try { available = locator.alive(current); } catch (Exception error) { available = false; }
-                final boolean alive = available;
-                handler.post(() -> {
-                    if (destroyed || chat == null || request != generation) return;
-                    if (alive) scheduleHealth(request);
-                    else showLanding("서버가 닫혀 있습니다.\n다시 열린 뒤 서버 입장을 눌러 주세요.");
-                });
-            });
+            if (connectionStarted && !ChatConnectionService.state(this).contains("instance"))
+                showLanding("서버가 닫혔거나 연결을 끊었습니다.\n다시 열린 뒤 서버 입장을 눌러 주세요.");
+            else scheduleHealth(request);
         }, 10000);
     }
 
     private void showLanding(String message) {
+        ChatConnectionService.disconnect(this); connectionStarted = false;
         ++generation; server = null;
         if (chat != null) { chat.stopLoading(); root.removeView(chat); chat.destroy(); chat = null; }
         finishFile(null); landing.setVisibility(View.VISIBLE);
@@ -216,7 +266,7 @@ public final class MainActivity extends Activity {
     }
     @Override public void onBackPressed() {
         if (chat != null) {
-            if (chat.canGoBack()) chat.goBack(); else showLanding("MainPC에서 서버를 연 뒤 입장해 주세요.");
+            if (chat.canGoBack()) chat.goBack(); else moveTaskToBack(true);
         } else super.onBackPressed();
     }
     private void finishFile(Uri[] values) {

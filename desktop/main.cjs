@@ -58,6 +58,18 @@ async function start() {
   await startServer();
   ipcMain.handle('host:info', event => { authorize(event); return hostInfo(); });
   ipcMain.handle('host:quit', event => { authorize(event); app.quit(); });
+  ipcMain.handle('host:announce', async (event, payload) => {
+    authorize(event);
+    if (!child?.connected) throw new Error('서버가 닫혀 있습니다.');
+    const requestId = require('node:crypto').randomUUID();
+    return new Promise((resolve, reject) => {
+      const finish = (error, result) => { clearTimeout(timer); child.off('message', receive); error ? reject(error) : resolve(result); };
+      const receive = message => { if (message?.type === 'admin:announcement-result' && message.requestId === requestId) finish(null, message.result); };
+      const timer = setTimeout(() => finish(new Error('서버 응답을 기다리는 중입니다. 다시 보내면 같은 공지를 확인합니다.')), 20000);
+      child.on('message', receive);
+      child.send({ type: 'admin:announcement', requestId, payload }, error => { if (error) finish(new Error('서버에 요청을 보내지 못했습니다.')); });
+    });
+  });
   ipcMain.handle('host:sharing', async event => {
     authorize(event);
     configureSharing();
@@ -83,6 +95,10 @@ async function start() {
   if (smoke) {
     const serverView = await serverWindow.webContents.executeJavaScript(`({ title: document.title, hasChatControl: !!document.getElementById('open-chat'), hasStopControl: !!document.getElementById('stop-server'), overflow: document.documentElement.scrollWidth > innerWidth })`);
     log('SMOKE_SERVER_UI ' + JSON.stringify({ ...serverView, windows: BrowserWindow.getAllWindows().length }));
+    if (process.env.CHAT_SMOKE_ANNOUNCE === '1') {
+      const notice = await serverWindow.webContents.executeJavaScript(`window.moeumHost.announce({clientId: crypto.randomUUID(), title: '검증 공지', body: '서버에서 게시하는 자세한 내용입니다.\\n두 번째 줄입니다.'})`);
+      log('SMOKE_ANNOUNCEMENT ' + JSON.stringify({ kind: notice.message?.kind, pushSent: notice.pushSent, warning: Boolean(notice.warning) }));
+    }
     const stopWatch = setInterval(() => {
       if (fs.existsSync(path.join(dataDir, 'close-server-window'))) { clearInterval(stopWatch); serverWindow.close(); }
     }, 100);

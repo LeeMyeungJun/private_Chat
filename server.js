@@ -7,6 +7,7 @@ import fs from 'node:fs';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { inspectMedia, MAX_INLINE_MEDIA_SECONDS } from './media-info.js';
+import { configurePush } from './push-notifications.js';
 
 const root = path.dirname(fileURLToPath(import.meta.url));
 const dataDir = path.resolve(process.env.DATA_DIR || path.join(root, '.data'));
@@ -35,6 +36,7 @@ function startFreshRoom() {
 }
 const sessions = new Map();
 const instanceId = randomUUID();
+const push = configurePush(dataDir);
 const loginAttempts = new Map();
 const MAX_FILE_SIZE = 50 * 1024 * 1024;
 const app = express();
@@ -71,7 +73,7 @@ app.use((req, res, next) => {
 });
 app.use(express.json({ limit: '32kb' }));
 app.get('/api/health', (req, res) => res.json({ ok: true, instanceId }));
-app.get('/api/info', (req, res) => res.json({ roomName: settings.roomName, maxFileSize: MAX_FILE_SIZE, maxFiles: 10, maxInlineMediaSeconds: MAX_INLINE_MEDIA_SECONDS }));
+app.get('/api/info', (req, res) => res.json({ roomName: settings.roomName, maxFileSize: MAX_FILE_SIZE, maxFiles: 10, maxInlineMediaSeconds: MAX_INLINE_MEDIA_SECONDS, pushEnabled: push.enabled }));
 app.post('/api/login', (req, res) => {
   const ip = req.socket.remoteAddress;
   const attempt = loginAttempts.get(ip) || { count: 0, until: Date.now() + 60000 };
@@ -161,6 +163,14 @@ function broadcastPresence() {
 }
 io.on('connection', socket => {
   broadcastPresence();
+  socket.on('notification:ring', async (payload, ack) => {
+    const reply = typeof ack === 'function' ? ack : () => {};
+    const session = socket.data.session;
+    if (session.expires < Date.now()) return reply({ error: '다시 입장해 주세요.' });
+    const result = await push.ring(session.nickname, instanceId);
+    if (result.ok) io.emit('notification:ring', { nickname: session.nickname, at: new Date().toISOString() });
+    reply(result);
+  });
   let sent = [];
   let lastTyping = 0;
   socket.on('typing', () => {
@@ -196,7 +206,36 @@ io.on('connection', socket => {
   });
   socket.on('disconnect', broadcastPresence);
 });
+const announcements = new Map();
+let lastAnnouncement = 0;
+async function publishAnnouncement(payload) {
+  if (!payload || typeof payload.clientId !== 'string' || !/^[0-9a-f-]{36}$/i.test(payload.clientId)) return { error: '올바르지 않은 공지 요청입니다.' };
+  if (announcements.has(payload.clientId)) return announcements.get(payload.clientId);
+  const title = typeof payload.title === 'string' ? payload.title.trim() : '';
+  const body = typeof payload.body === 'string' ? payload.body.trim() : '';
+  if (!title || title.length > 80 || !body || body.length > 5000) return { error: '제목은 1~80자, 자세한 내용은 1~5,000자로 입력해 주세요.' };
+  if (Date.now() - lastAnnouncement < 15000) return { error: '공지는 15초 후 다시 보내 주세요.' };
+  const operation = (async () => {
+    const message = { id: randomUUID(), seq: sequence + 1, clientId: payload.clientId, userId: 'server', nickname: '서버 공지', kind: 'announcement', title, text: body, attachments: [], createdAt: new Date().toISOString() };
+    fs.appendFileSync(historyPath, JSON.stringify(message) + '\n');
+    sequence++; history.push(message); lastAnnouncement = Date.now();
+    io.emit('message', message);
+    const result = await push.ring('서버', instanceId, { title, body, messageId: message.id });
+    return { message, pushSent: Boolean(result.ok), warning: result.error || '' };
+  })();
+  announcements.set(payload.clientId, operation);
+  try { return await operation; }
+  catch { announcements.delete(payload.clientId); return { error: '공지를 저장하지 못했습니다. 다시 시도해 주세요.' }; }
+}
+// Administrative announcements are available only to the local parent process.
+if (process.connected) process.on('message', async request => {
+  if (request?.type !== 'admin:announcement' || typeof request.requestId !== 'string') return;
+  const result = await publishAnnouncement(request.payload);
+  if (process.connected) process.send({ type: 'admin:announcement-result', requestId: request.requestId, result });
+});
 const housekeeping = setInterval(() => {
+  // An active native or browser connection lasts until explicit logout or server shutdown.
+  for (const socket of io.sockets.sockets.values()) socket.data.session.expires = Date.now() + 7 * 86400000;
   for (const [token, session] of sessions) if (session.expires < Date.now()) sessions.delete(token);
   for (const [ip, attempt] of loginAttempts) if (attempt.until < Date.now()) loginAttempts.delete(ip);
 }, 60000);
