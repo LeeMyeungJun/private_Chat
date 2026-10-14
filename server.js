@@ -8,6 +8,7 @@ import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { inspectMedia, MAX_INLINE_MEDIA_SECONDS } from './media-info.js';
 import { configurePush } from './push-notifications.js';
+import { notificationAccess, automationNotice } from './notification-api.js';
 
 const root = path.dirname(fileURLToPath(import.meta.url));
 const dataDir = path.resolve(process.env.DATA_DIR || path.join(root, '.data'));
@@ -37,6 +38,7 @@ function startFreshRoom() {
 const sessions = new Map();
 const instanceId = randomUUID();
 const push = configurePush(dataDir);
+const requireNotificationKey = notificationAccess(dataDir);
 const loginAttempts = new Map();
 const MAX_FILE_SIZE = 50 * 1024 * 1024;
 const app = express();
@@ -74,6 +76,18 @@ app.use((req, res, next) => {
 app.use(express.json({ limit: '32kb' }));
 app.get('/api/health', (req, res) => res.json({ ok: true, instanceId }));
 app.get('/api/info', (req, res) => res.json({ roomName: settings.roomName, maxFileSize: MAX_FILE_SIZE, maxFiles: 10, maxInlineMediaSeconds: MAX_INLINE_MEDIA_SECONDS, pushEnabled: push.enabled }));
+app.get('/api/notifications/status', requireNotificationKey, (req, res) => res.json({ ok: true, apiVersion: 1, instanceId, pushEnabled: push.enabled }));
+app.post('/api/notifications', requireNotificationKey, async (req, res) => {
+  const parsed = automationNotice(req.body, instanceId);
+  if (parsed.error) return res.status(parsed.code === 'SERVER_CHANGED' ? 409 : 400).json({ ok: false, ...parsed });
+  const result = await publishAnnouncement(parsed.notice);
+  if (result.error) {
+    const status = result.code === 'RATE_LIMITED' ? 429 : result.code === 'IDEMPOTENCY_CONFLICT' ? 409 : result.code === 'SAVE_FAILED' ? 500 : 400;
+    if (status === 429) res.setHeader('Retry-After', String(Math.ceil(result.retryAfterMs / 1000)));
+    return res.status(status).json({ ok: false, ...result });
+  }
+  res.status(result.replayed ? 200 : 201).json({ ok: true, posted: true, messageId: result.message.id, instanceId, pushSent: result.pushSent, warning: result.warning, replayed: Boolean(result.replayed) });
+});
 app.post('/api/login', (req, res) => {
   const ip = req.socket.remoteAddress;
   const attempt = loginAttempts.get(ip) || { count: 0, until: Date.now() + 60000 };
@@ -209,23 +223,33 @@ io.on('connection', socket => {
 const announcements = new Map();
 let lastAnnouncement = 0;
 async function publishAnnouncement(payload) {
-  if (!payload || typeof payload.clientId !== 'string' || !/^[0-9a-f-]{36}$/i.test(payload.clientId)) return { error: '올바르지 않은 공지 요청입니다.' };
-  if (announcements.has(payload.clientId)) return announcements.get(payload.clientId);
+  if (!payload || typeof payload.clientId !== 'string' || !/^[0-9a-f-]{36}$/i.test(payload.clientId)) return { code: 'INVALID_REQUEST', error: '올바르지 않은 공지 요청입니다.' };
   const title = typeof payload.title === 'string' ? payload.title.trim() : '';
   const body = typeof payload.body === 'string' ? payload.body.trim() : '';
-  if (!title || title.length > 80 || !body || body.length > 5000) return { error: '제목은 1~80자, 자세한 내용은 1~5,000자로 입력해 주세요.' };
-  if (Date.now() - lastAnnouncement < 15000) return { error: '공지는 15초 후 다시 보내 주세요.' };
+  const source = typeof payload.source === 'string' ? payload.source.trim() : '';
+  if (!title || title.length > 80 || !body || body.length > 5000) return { code: 'INVALID_REQUEST', error: '제목은 1~80자, 자세한 내용은 1~5,000자로 입력해 주세요.' };
+  if (source.length > 40 || /[\p{C}]/u.test(source)) return { code: 'INVALID_REQUEST', error: '올바르지 않은 발송 프로그램 이름입니다.' };
+  const signature = JSON.stringify([title, body, source]);
+  const existing = announcements.get(payload.clientId);
+  if (existing) {
+    if (existing.signature !== signature) return { code: 'IDEMPOTENCY_CONFLICT', error: '같은 eventId로 다른 내용을 보낼 수 없습니다.' };
+    return { ...await existing.operation, replayed: true };
+  }
+  const retryAfterMs = 15000 - (Date.now() - lastAnnouncement);
+  if (retryAfterMs > 0) return { code: 'RATE_LIMITED', retryAfterMs, error: '공지는 15초 간격으로 보내 주세요.' };
   const operation = (async () => {
-    const message = { id: randomUUID(), seq: sequence + 1, clientId: payload.clientId, userId: 'server', nickname: '서버 공지', kind: 'announcement', title, text: body, attachments: [], createdAt: new Date().toISOString() };
+    const message = { id: randomUUID(), seq: sequence + 1, clientId: payload.clientId, userId: 'server', nickname: source ? '서버 공지 · ' + source : '서버 공지', kind: 'announcement', title, text: body, source, attachments: [], createdAt: new Date().toISOString() };
     fs.appendFileSync(historyPath, JSON.stringify(message) + '\n');
     sequence++; history.push(message); lastAnnouncement = Date.now();
     io.emit('message', message);
     const result = await push.ring('서버', instanceId, { title, body, messageId: message.id });
     return { message, pushSent: Boolean(result.ok), warning: result.error || '' };
-  })();
-  announcements.set(payload.clientId, operation);
-  try { return await operation; }
-  catch { announcements.delete(payload.clientId); return { error: '공지를 저장하지 못했습니다. 다시 시도해 주세요.' }; }
+  })().catch(() => {
+    announcements.delete(payload.clientId);
+    return { code: 'SAVE_FAILED', error: '공지를 저장하지 못했습니다. 다시 시도해 주세요.' };
+  });
+  announcements.set(payload.clientId, { signature, operation });
+  return operation;
 }
 // Administrative announcements are available only to the local parent process.
 if (process.connected) process.on('message', async request => {
@@ -244,6 +268,7 @@ app.use(express.static(path.join(root, 'public')));
 app.use((error, req, res, next) => {
   console.error(error.message);
   const tooBig = error.code === 'LIMIT_FILE_SIZE';
+  if (error.type === 'entity.too.large') return res.status(413).json({ ok: false, code: 'REQUEST_TOO_LARGE', error: '알림 요청 JSON은 32 KiB 이하로 보내 주세요.' });
   res.status(error instanceof multer.MulterError || error.type === 'entity.parse.failed' ? 400 : 500).json({ error: tooBig ? '파일 한 개의 최대 크기는 50MB입니다.' : error instanceof multer.MulterError ? '첨부파일은 한 번에 10개까지 가능합니다.' : '요청을 처리하지 못했습니다. 다시 시도해 주세요.' });
 });
 const port = Number(process.env.PORT || 3000);

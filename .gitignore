@@ -14,3 +14,5 @@ android/captures/
 dist/
 android/app/google-services.json
 *service-account*.json
+__pycache__/
+*.py[cod]
