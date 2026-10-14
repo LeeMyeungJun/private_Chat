@@ -164,12 +164,31 @@ function addMessage(message) {
 function fileCard(file) {
   const link = element('a', 'file-card'); link.href = '/files/' + file.id + '?download=1'; link.download = file.name;
   const badge = element('span', 'file-type'); badge.append(icon('file'));
-  const details = element('span', 'file-details'); details.append(element('strong', '', file.name), element('small', '', bytes(file.size) + ' · 다운로드'));
+  const details = element('span', 'file-details'); details.append(element('strong', '', file.name), element('small', '', bytes(file.size) + (file.media && !file.inlinePlayable ? ' · ' + (file.duration > 600 ? '10분 초과 · 다운로드' : '첨부파일 다운로드') : ' · 다운로드')));
   link.append(badge, details, icon('download')); return link;
+}
+function mediaCard(file) {
+  const card = element('div', 'media-card ' + file.media + '-card');
+  const header = element('div', 'media-header'), badge = element('span', 'file-type'); badge.append(icon(file.media === 'video' ? 'photo' : 'audio'));
+  const details = element('div', 'file-details');
+  const minutes = Math.floor(file.duration / 60), seconds = String(Math.floor(file.duration % 60)).padStart(2, '0');
+  details.append(element('strong', '', file.name), element('small', '', `${minutes}:${seconds} · ${bytes(file.size)}`));
+  const download = element('a', 'icon-button'); download.href = '/files/' + file.id + '?download=1'; download.download = file.name; download.setAttribute('aria-label', file.name + ' 다운로드'); download.append(icon('download'));
+  header.append(badge, details, download); card.append(header);
+  const player = element(file.media === 'video' ? 'video' : 'audio', 'media-player');
+  player.controls = true; player.preload = 'none'; player.src = '/files/' + file.id;
+  player.setAttribute('aria-label', file.name + ' 재생');
+  if (file.media === 'video') player.playsInline = true;
+  player.addEventListener('play', () => document.querySelectorAll('audio,video').forEach(other => { if (other !== player) other.pause(); }));
+  player.addEventListener('error', () => { if (!card.querySelector('.media-error')) card.append(element('p', 'media-error', '이 브라우저에서 재생할 수 없습니다. 다운로드해서 들어 주세요.')); });
+  card.append(player); return card;
 }
 function renderMessages(stick = false) {
   const container = $('messages'); const oldTop = container.scrollTop;
-  const list = $('message-list'); list.replaceChildren();
+  const list = $('message-list');
+  const existing = new Map([...list.children].filter(node => node.dataset.messageId).map(node => [node.dataset.messageId, node]));
+  const dates = new Map([...list.children].filter(node => node.dataset.date).map(node => [node.dataset.date, node]));
+  const desired = [];
   const query = $('search-input').value.trim().toLocaleLowerCase();
   const sorted = [...state.messages.values()].sort((a, b) => a.seq - b.seq);
   $('workspace').classList.toggle('has-messages', sorted.length > 0);
@@ -179,8 +198,10 @@ function renderMessages(stick = false) {
     found++;
     const created = new Date(message.createdAt);
     const day = created.toLocaleDateString('ko-KR', { year: 'numeric', month: 'long', day: 'numeric', weekday: 'short' });
-    if (day !== previousDate) { list.append(element('div', 'date-divider', day)); previousDate = day; }
+    if (day !== previousDate) { const divider = dates.get(day) || element('div', 'date-divider', day); divider.dataset.date = day; desired.push(divider); previousDate = day; }
+    if (existing.has(message.id)) { desired.push(existing.get(message.id)); continue; }
     const row = element('article', 'message' + (message.userId === state.user?.id ? ' mine' : ''));
+    row.dataset.messageId = message.id;
     row.append(element('span', 'avatar', initials(message.nickname)));
     const body = element('div', 'message-body'), meta = element('div', 'message-meta');
     const time = element('time', '', created.toLocaleTimeString('ko-KR', { hour: '2-digit', minute: '2-digit', hour12: false })); time.dateTime = message.createdAt;
@@ -189,6 +210,7 @@ function renderMessages(stick = false) {
     if (message.attachments.length) {
       const attachments = element('div', 'message-attachments');
       for (const file of message.attachments) {
+        if (file.inlinePlayable && file.media) { attachments.append(mediaCard(file)); continue; }
         if (!file.image) { attachments.append(fileCard(file)); continue; }
         const button = element('button', 'image-attachment'); button.type = 'button'; button.setAttribute('aria-label', file.name + ' 확대');
         const image = element('img'); image.src = '/files/' + file.id; image.alt = file.name; image.loading = 'lazy';
@@ -198,8 +220,11 @@ function renderMessages(stick = false) {
       }
       body.append(attachments);
     }
-    row.append(body); list.append(row);
+    row.append(body); desired.push(row);
   }
+  // Keep existing media nodes in place so incoming messages do not stop playback.
+  desired.forEach((node, index) => { if (list.children[index] !== node) list.insertBefore(node, list.children[index] || null); });
+  const keep = new Set(desired); [...list.children].forEach(node => { if (!keep.has(node)) node.remove(); });
   $('older').hidden = !state.hasMore || Boolean(query);
   $('search-count').textContent = query ? found + '개' : '';
   $('search-empty').hidden = !query || found > 0;

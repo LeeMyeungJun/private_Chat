@@ -8,7 +8,7 @@ import { once } from 'node:events';
 import { io } from 'socket.io-client';
 
 test('authenticated chat, files, retry deduplication and a fresh room on every server start', async t => {
-  const dataDir = await mkdtemp(path.join(tmpdir(), 'moeum-test-'));
+  const dataDir = await mkdtemp(path.join(tmpdir(), '.moeum-test-'));
   let child;
   const sockets = [];
   t.after(async () => { sockets.forEach(socket => socket.close()); if (child?.exitCode === null) { child.kill(); await once(child, 'exit'); } await rm(dataDir, { recursive: true, force: true }); });
@@ -56,8 +56,40 @@ test('authenticated chat, files, retry deduplication and a fresh room on every s
   assert.equal(imageResponse.status, 200); assert.equal(imageResponse.headers.get('content-type'), 'image/png'); assert.deepEqual(Buffer.from(await imageResponse.arrayBuffer()), png);
   const svgResponse = await fetch(base + '/files/' + files[1].id, { headers: { Cookie: bob.cookie } });
   assert.match(svgResponse.headers.get('content-disposition'), /^attachment/); assert.equal(svgResponse.headers.get('content-type'), 'application/octet-stream');
+  function wav(seconds) {
+    const length = 8000 * seconds, data = Buffer.alloc(44 + length, 128);
+    data.write('RIFF', 0); data.writeUInt32LE(36 + length, 4); data.write('WAVEfmt ', 8); data.writeUInt32LE(16, 16);
+    data.writeUInt16LE(1, 20); data.writeUInt16LE(1, 22); data.writeUInt32LE(8000, 24); data.writeUInt32LE(8000, 28);
+    data.writeUInt16LE(1, 32); data.writeUInt16LE(8, 34); data.write('data', 36); data.writeUInt32LE(length, 40); return data;
+  }
+  const audioForm = new FormData();
+  audioForm.append('files', new Blob([wav(2)], { type: 'audio/wav' }), 'short.wav');
+  audioForm.append('files', new Blob([wav(600)], { type: 'audio/wav' }), 'ten-minutes.wav');
+  audioForm.append('files', new Blob([wav(601)], { type: 'audio/wav' }), 'long.wav');
+  audioForm.append('files', new Blob(['<script>alert(1)</script>'], { type: 'audio/mpeg' }), 'fake.mp3');
+  audioForm.append('files', new Blob([await readFile('test/fixtures/short.mp3')], { type: 'audio/mpeg' }), 'short.mp3');
+  audioForm.append('files', new Blob([await readFile('test/fixtures/short.mp4')], { type: 'video/mp4' }), 'short.mp4');
+  const audioUpload = await fetch(base + '/api/upload', { method: 'POST', headers: { Cookie: alice.cookie }, body: audioForm });
+  assert.equal(audioUpload.status, 200); const { files: audioFiles } = await audioUpload.json();
+  assert.equal(audioFiles[0].media, 'audio'); assert.equal(audioFiles[0].duration, 2); assert.equal(audioFiles[0].inlinePlayable, true);
+  assert.equal(audioFiles[1].duration, 600); assert.equal(audioFiles[1].inlinePlayable, true);
+  assert.equal(audioFiles[2].duration, 601); assert.equal(audioFiles[2].inlinePlayable, false);
+  assert.equal(audioFiles[3].type, 'application/octet-stream'); assert.ok(!audioFiles[3].inlinePlayable);
+  assert.equal(audioFiles[4].media, 'audio'); assert.equal(audioFiles[4].inlinePlayable, true); assert.ok(audioFiles[4].duration > 0 && audioFiles[4].duration < 2);
+  assert.equal(audioFiles[5].media, 'video'); assert.equal(audioFiles[5].inlinePlayable, true); assert.ok(audioFiles[5].duration > 0 && audioFiles[5].duration < 2);
+  assert.equal((await fetch(base + '/files/' + audioFiles[0].id, { headers: { Cookie: bob.cookie } })).status, 404);
+  const audioMessage = await a.emitWithAck('message:send', { clientId: crypto.randomUUID(), text: '', attachments: audioFiles.map(f => f.id) });
+  assert.equal(audioMessage.message.attachments[0].inlinePlayable, true);
+  const range = await fetch(base + '/files/' + audioFiles[0].id, { headers: { Cookie: bob.cookie, Range: 'bytes=0-43' } });
+  assert.equal(range.status, 206); assert.equal(range.headers.get('content-type'), 'audio/wav'); assert.match(range.headers.get('content-disposition'), /^inline/);
+  assert.equal((await range.arrayBuffer()).byteLength, 44);
+  const download = await fetch(base + '/files/' + audioFiles[0].id + '?download=1', { headers: { Cookie: bob.cookie } }); assert.match(download.headers.get('content-disposition'), /^attachment/);
+  const longAudio = await fetch(base + '/files/' + audioFiles[2].id, { headers: { Cookie: bob.cookie } }); assert.match(longAudio.headers.get('content-disposition'), /^attachment/);
+  const mp4Range = await fetch(base + '/files/' + audioFiles[5].id, { headers: { Cookie: bob.cookie, Range: 'bytes=0-31' } });
+  assert.equal(mp4Range.status, 206); assert.equal(mp4Range.headers.get('content-type'), 'video/mp4'); assert.match(mp4Range.headers.get('content-disposition'), /^inline/);
+  assert.deepEqual(Buffer.from(await mp4Range.arrayBuffer()), (await readFile('test/fixtures/short.mp4')).subarray(0, 32));
   const large = await a.emitWithAck('message:send', { clientId: crypto.randomUUID(), text: 'a'.repeat(5001), attachments: [] }); assert.ok(large.error);
-  const after = await (await fetch(base + '/api/messages?after=1', { headers: { Cookie: alice.cookie } })).json(); assert.equal(after.messages.length, 0);
+  const after = await (await fetch(base + '/api/messages?after=2', { headers: { Cookie: alice.cookie } })).json(); assert.equal(after.messages.length, 0);
   assert.equal((await fetch(base + '/files/' + files[0].id)).status, 401);
   const logout = await fetch(base + '/api/logout', { method: 'POST', headers: { Cookie: bob.cookie } }); assert.equal(logout.status, 200);
   assert.equal((await fetch(base + '/api/messages', { headers: { Cookie: bob.cookie } })).status, 401);

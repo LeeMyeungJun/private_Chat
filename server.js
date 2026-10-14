@@ -6,6 +6,7 @@ import { randomBytes, randomUUID, scryptSync, timingSafeEqual } from 'node:crypt
 import fs from 'node:fs';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
+import { inspectMedia, MAX_INLINE_MEDIA_SECONDS } from './media-info.js';
 
 const root = path.dirname(fileURLToPath(import.meta.url));
 const dataDir = path.resolve(process.env.DATA_DIR || path.join(root, '.data'));
@@ -67,14 +68,14 @@ app.use((req, res, next) => {
   res.setHeader('X-Content-Type-Options', 'nosniff');
   res.setHeader('Referrer-Policy', 'same-origin');
   res.setHeader('X-Frame-Options', 'DENY');
-  res.setHeader('Content-Security-Policy', "default-src 'self'; connect-src 'self' ws: wss:; img-src 'self' blob: data:; style-src 'self'; script-src 'self'; object-src 'none'; frame-ancestors 'none'; base-uri 'self'; form-action 'self'");
+  res.setHeader('Content-Security-Policy', "default-src 'self'; connect-src 'self' ws: wss:; img-src 'self' blob: data:; media-src 'self' blob:; style-src 'self'; script-src 'self'; object-src 'none'; frame-ancestors 'none'; base-uri 'self'; form-action 'self'");
   if (req.path.startsWith('/api/') || req.path.startsWith('/files/')) res.setHeader('Cache-Control', 'no-store');
   if (!['GET', 'HEAD', 'OPTIONS'].includes(req.method) && !sameOrigin(req)) return res.status(403).json({ error: '허용되지 않은 요청입니다.' });
   next();
 });
 app.use(express.json({ limit: '32kb' }));
 app.get('/api/health', (req, res) => res.json({ ok: true }));
-app.get('/api/info', (req, res) => res.json({ roomName: settings.roomName, maxFileSize: MAX_FILE_SIZE, maxFiles: 10 }));
+app.get('/api/info', (req, res) => res.json({ roomName: settings.roomName, maxFileSize: MAX_FILE_SIZE, maxFiles: 10, maxInlineMediaSeconds: MAX_INLINE_MEDIA_SECONDS }));
 app.post('/api/login', (req, res) => {
   const ip = req.socket.remoteAddress;
   const attempt = loginAttempts.get(ip) || { count: 0, until: Date.now() + 60000 };
@@ -123,18 +124,20 @@ function imageType(filename) {
   return null;
 }
 const upload = multer({ storage: multer.diskStorage({ destination: uploadDir, filename: (req, file, cb) => cb(null, randomUUID()) }), limits: { fileSize: MAX_FILE_SIZE, files: 10, fields: 0, parts: 10 } });
-app.post('/api/upload', requireAuth, upload.array('files', 10), (req, res, next) => {
+app.post('/api/upload', requireAuth, upload.array('files', 10), async (req, res, next) => {
   try {
     if (!req.files?.length) return res.status(400).json({ error: '첨부할 파일을 선택해 주세요.' });
-    const files = req.files.map(file => {
+    const files = [];
+    for (const file of req.files) {
       let name = file.originalname;
       // Browser multipart names are UTF-8; Multer exposes the header as latin1.
       const decoded = Buffer.from(name, 'latin1').toString('utf8');
       if (!decoded.includes('\ufffd')) name = decoded;
       name = path.basename(name.replaceAll('\\', '/')).replace(/[\p{C}]/gu, '').slice(0, 180) || '첨부파일';
       const type = imageType(file.path);
-      return { id: file.filename, name, size: file.size, type: type || 'application/octet-stream', image: Boolean(type), owner: req.session.id };
-    });
+      const media = type ? {} : await inspectMedia(file.path);
+      files.push({ id: file.filename, name, size: file.size, type: type || 'application/octet-stream', image: Boolean(type), ...media, owner: req.session.id });
+    }
     for (const file of files) uploads[file.id] = file;
     const temp = uploadIndexPath + '.tmp';
     fs.writeFileSync(temp, JSON.stringify(uploads));
@@ -148,8 +151,9 @@ app.get('/files/:id', requireAuth, (req, res) => {
   const filename = path.join(uploadDir, file.id);
   if (!fs.existsSync(filename)) return res.status(404).json({ error: '파일을 찾을 수 없습니다.' });
   res.setHeader('Content-Type', file.type);
-  res.setHeader('Content-Disposition', `${file.image && req.query.download !== '1' ? 'inline' : 'attachment'}; filename="download"; filename*=UTF-8''${encodeURIComponent(file.name)}`);
-  res.sendFile(filename);
+  res.setHeader('Content-Disposition', `${(file.image || file.inlinePlayable) && req.query.download !== '1' ? 'inline' : 'attachment'}; filename="download"; filename*=UTF-8''${encodeURIComponent(file.name)}`);
+  // Storage is intentionally under .data; only authenticated indexed IDs reach here.
+  res.sendFile(filename, { dotfiles: 'allow' });
 });
 io.use((socket, next) => {
   const session = sessionFor(socket.request);

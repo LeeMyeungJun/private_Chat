@@ -1,5 +1,6 @@
 const { app, BrowserWindow, Menu, dialog, clipboard, ipcMain, session, shell, screen } = require('electron');
 const { fork } = require('node:child_process');
+const { once } = require('node:events');
 const fs = require('node:fs');
 const path = require('node:path');
 const root = path.resolve(__dirname, '..');
@@ -10,6 +11,7 @@ const smoke = Boolean(process.env.CHAT_DESKTOP_SMOKE);
 const shareAddressPath = smoke ? path.join(dataDir, '공유주소.txt') : path.join(root, '공유주소.txt');
 if (smoke) app.setPath('userData', path.join(dataDir, 'electron-state'));
 let window, serverWindow, child, tunnelWorker, quitting = false;
+const closingChats = new WeakSet();
 let publicUrl = '', sharingBusy = false, shareStatus = '외부 접속 주소를 준비하고 있어요.';
 const logPath = path.join(dataDir, 'desktop.log');
 fs.mkdirSync(dataDir, { recursive: true });
@@ -127,7 +129,11 @@ async function openServerWindow() {
 }
 async function openChat() {
   if (quitting) return;
-  if (window && !window.isDestroyed()) { if (!smoke) { if (window.isMinimized()) window.restore(); window.show(); window.focus(); } return; }
+  if (window && !window.isDestroyed()) {
+    if (closingChats.has(window)) { await once(window, 'closed'); return openChat(); }
+    if (!smoke) { if (window.isMinimized()) window.restore(); window.show(); window.focus(); }
+    return;
+  }
   const chat = new BrowserWindow({ width: smoke && process.env.CHAT_SMOKE_MOBILE ? 430 : 1280, height: 880, minWidth: 400, minHeight: 560, title: '모음 · 채팅', backgroundColor: '#13131c', show: false, autoHideMenuBar: true, webPreferences: { preload: path.join(__dirname, 'preload.cjs'), contextIsolation: true, nodeIntegration: false, sandbox: true } });
   window = chat;
   if (!smoke) {
@@ -135,7 +141,7 @@ async function openChat() {
     const sideBySide = area.width >= 1300;
     chat.setBounds({ x: area.x + (sideBySide ? 504 : 65), y: area.y + (sideBySide ? 24 : 50), width: Math.max(400, Math.min(1280, area.width - (sideBySide ? 528 : 90))), height: Math.max(560, Math.min(880, area.height - (sideBySide ? 48 : 75))) });
   }
-  chat.on('close', () => log('CHAT_WINDOW_CLOSE'));
+  chat.on('close', () => { closingChats.add(chat); log('CHAT_WINDOW_CLOSE'); });
   chat.on('closed', () => { if (window === chat) window = null; publishInfo(); });
   chat.webContents.setWindowOpenHandler(() => ({ action: 'deny' }));
   chat.webContents.on('will-navigate', (event, url) => { if (new URL(url).origin !== localUrl) event.preventDefault(); });
