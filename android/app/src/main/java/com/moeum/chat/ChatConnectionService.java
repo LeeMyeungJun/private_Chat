@@ -99,7 +99,7 @@ public final class ChatConnectionService extends Service {
                     // Timeouts, Cloudflare errors and Doze are not evidence of server shutdown.
                     // Keep the saved session and topic; Socket.IO retries independently.
                 }
-            }, 10, 10, TimeUnit.SECONDS);
+            }, 10, 10, TimeUnit.MINUTES);
         } catch (Exception error) {
             // Preserve push even if opening the native socket fails.
             android.util.Log.w("MoeumConnection", "Connection setup failed; room subscription retained");
